@@ -18,5 +18,5 @@ RUN apt-get update && \
     rm *.zip && \
     cd /home/rjdbenchmark && \
     ls -l && \
-    R --no-restore --no-save -e 'renv::restore()' -e 'devtools::install(".")'
+    R --no-restore --no-save -e 'print(5+5)'  -e 'renv::restore()' -e 'devtools::install(".")'
 WORKDIR /home/rjdbenchmark
