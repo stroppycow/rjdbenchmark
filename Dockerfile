@@ -15,7 +15,7 @@ RUN apt-get update && \
     wget https://github.com/jdemetra/jwsacruncher/releases/download/v2.2.2/jwsacruncher-2.2.2-bin.zip -O /home/cruncher/jwsacruncher-2.2.2-bin.zip && \
     cd /home/cruncher && \
     unzip "*.zip" && \
-    rm *.zip \
+    rm *.zip && \
     cd /home/rjdbenchmark && \
     R --no-restore --no-save -e 'renv::activate()' -e 'devtools::install(".")'
 WORKDIR /home/rjdbenchmark
