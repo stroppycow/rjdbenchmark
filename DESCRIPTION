@@ -1,0 +1,61 @@
+Package: rjdbenchmark
+Type: Package
+Title: JDemetra+ Workspace comparison
+Version: 0.1.0
+Author: Theo Leroy
+Maintainer: Theo Leroy <theo.leroy@insee.fr>
+Description: Not defined yet
+License: Not defined yet
+Encoding: UTF-8
+LazyData: true
+Depends: R (>= 4.1)
+Imports:
+    data.table,
+    fs,
+    arrow,
+    lubridate,
+    yaml,
+    stringr,
+    rJava,
+    RJDemetra,
+    rjwsacruncher,
+    rjd3workspace,
+    logger,
+    rlang,
+    quarto,
+    readr,
+    dplyr,
+    tidyr
+Remotes:
+    rjdverse/rjd3workspace
+Suggests:
+    devtools,
+    lintr,
+    styler,
+    microbenchmark,
+    haven,
+    readxl,
+    knitr,
+    pkgdown,
+    rmarkdown,
+    roxygen2
+RoxygenNote: 7.3.2
+Collate: 
+    'utils-s4.R'
+    'utils-date.R'
+    'TimeSeriesSet.R'
+    'config-control.R'
+    'config-levels-reader.R'
+    'config-mapping-reader.R'
+    'config-metadata-reader.R'
+    'config-serie-group-reader.R'
+    'config-trading-days-reader.R'
+    'jdemetra-crunch.R'
+    'jdemetra-demetram-reader.R'
+    'jdemetra-init-workspace.R'
+    'jdemetra-list-tradingdays.R'
+    'jdemetra-ts-reader.R'
+    'jdemetra-utils.R'
+    'main.R'
+    'package.R'
+    'timeseriesset-reader.R'

@@ -1,0 +1,19 @@
+project:
+  type: website
+  output-dir: public
+  resources: 
+    - "./tmp/output/**"
+    - "./static/**"
+  preview:
+    port: 4200
+    browser: true
+  render:
+    - docs/index.qmd
+
+format:
+  html:
+    theme: cosmo
+    toc: true
+
+website:
+  title: "Campagne annuelle de désaisonnalisation"

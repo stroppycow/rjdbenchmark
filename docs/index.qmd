@@ -1,0 +1,1892 @@
+---
+title: "Analyse de la campagne annuelle de désaisonnalisation"
+editor: visual
+lang: fr
+format:
+  html:
+    toc: true
+    code-fold: true
+    fig-format: svg
+    css: '../../static/css/tabulator_bootstrap5.min.css'
+---
+
+## Sélection
+
+```{ojs}
+//| echo: false
+//| output: false
+
+Plotly = require("https://cdn.plot.ly/plotly-2.29.1.min.js")
+import("https://cdn.plot.ly/plotly-2.29.1.min.js")
+
+chroma = require(await FileAttachment("../../static/js/chroma.min.js").url()) ;
+
+function groupByKey(array, key) {
+   return array
+     .reduce((hash, obj) => {
+       if(obj[key] === undefined) return hash; 
+       return Object.assign(hash, { [obj[key]]:( hash[obj[key]] || [] ).concat(obj)})
+     }, {})
+}
+
+function getColorEvol(value) {
+  const f = chroma.scale(['#f0522b', '#ffffff', '#5462ff']);
+  if(value > 1){
+    return f(0) ;
+  } else if(value < -1){
+    return f(1) ;
+  } else {
+    return f(1-(value+1.0)/2.0) ;
+  }
+}
+
+
+Tabulator = require("tabulator-tables@5.5.2")
+
+Tabulator.extendModule("format", "formatters", {
+    numberfmt:function(cell, formatterParams){
+	  var num = cell.getValue();
+      var tempnum = "";
+	  if (num == "0"){
+		   tempnum = "0";
+	  }
+	  else if (num == ""){
+		 tempnum = "";
+	  }
+	  else{
+		tempnum = Number(num).toLocaleString();
+	  }
+	  return(tempnum);
+    },
+});
+
+db = DuckDBClient.of({
+  mapping: {file: FileAttachment("../../tmp/output/mapping.csv"), header: true},
+  serie_group: {file: FileAttachment("../../tmp/output/serie_group.csv"), header: true},
+  levels: {file: FileAttachment("../../tmp/output/levels.csv"), header: true},
+  jd_series: FileAttachment("../../tmp/output/series.parquet"),
+  jd_infos : FileAttachment("../../tmp/output/infos.parquet"),
+  jd_outliers : FileAttachment("../../tmp/output/outliers.parquet"),
+  jd_td : FileAttachment("../../tmp/output/trading_days.parquet"),
+  jd_td_labels : {file: FileAttachment("../../tmp/output/trading_days.csv"), header: true}
+}) ;
+
+
+type_serie_group = Object.fromEntries((await db.query(`
+     SELECT serie_group, label, priority 
+     FROM serie_group 
+     ORDER BY priority ;
+`)).map((y) => {
+      var x = y.toJSON();
+      return [x['serie_group'], x] ;
+    }
+)) ;
+
+types_levels = Object.fromEntries((await db.query(`
+     SELECT level, label, priority 
+     FROM levels 
+     ORDER BY priority ;
+`)).map((y) => {
+      var x = y.toJSON();
+      return [x['level'], x] ;
+    }
+)) ;
+
+async function get_propositions_serie_group() {
+  return (await db.query(`
+         SELECT serie_group, label, priority 
+         FROM serie_group 
+         ORDER BY priority ;
+    `)).map((y) => {
+          var x = y.toJSON();
+          return x ;
+        }
+    ) ;
+}
+
+async function get_propositions_levels(serie_group) {
+  return (await db.query(`
+       SELECT level, levels.label as label, levels.priority as priority
+       FROM (
+          SELECT DISTINCT level
+          FROM mapping
+          WHERE serie_group = ?
+       ) AS t
+       LEFT JOIN levels USING(level)
+       ORDER BY priority ;
+  `, [serie_group])).map((y) => {
+        var x = y.toJSON();
+        return x ;
+      }
+  ) ;
+}
+
+async function get_propositions_codes(serie_group, level){
+  return (await db.query(`
+    SELECT code
+    FROM mapping
+    WHERE serie_group = ? and level = ?`,
+    [serie_group, level]
+  )).map((y) => y.toJSON()['code']).sort() ;
+}
+
+
+available_series_map = (await db.query(`
+    SELECT mapping.serie_group as serie_group, mapping.level as level, code
+    FROM mapping
+    LEFT JOIN serie_group USING(serie_group)
+    LEFT JOIN levels USING(level)
+    ORDER BY serie_group.priority, levels.priority, code
+`)).map((x) => x.toJSON()) ;
+
+
+function get_default_value_level_select(previous_default_value, serie_group){
+  if(previous_default_value['serie_group'] === serie_group){
+    return previous_default_value['level'] ;
+  } else {
+    let el = available_series_map.find((x) => x['serie_group'] === serie_group) ;
+    return {
+      id: el['level'],
+      label: types_levels[el['level']]['label']
+    } ;
+  }
+}
+
+function get_default_value_code_select(previous_default_value, serie_group, level){
+  if(previous_default_value['serie_group'] === serie_group &&
+      previous_default_value['level'] === level){
+    return previous_default_value['code'] ;
+  } else {
+    let el = available_series_map.find((x) => {
+      return x['serie_group'] === serie_group && x['level'] === level;
+    }) ;
+    return el['code'] ;
+  }
+}
+
+    
+default_value_input =  ({
+  serie_group: available_series_map[0]['serie_group'],
+  level: available_series_map[0]['level'],
+  code: available_series_map[0]['code']
+}) ;
+
+
+function set_input(input, value) {
+  input.value = value;
+  input.dispatchEvent(new Event("input", {bubbles: true}));
+}
+
+function get_unique_key(x){
+  return x['serie_group'] + ' ' + x['level'] + ' ' + x['code']  ;
+}
+
+rank_mapping = Object.fromEntries(available_series_map.map((x, i) => [get_unique_key(x) ,i])) ;
+
+function format_span(info){
+  var d = {} ;
+  var precision = {
+    year: "numeric",
+    month: "2-digit"
+  } ;
+  
+  if(info['period'] == 12){
+  
+    var serie_span_start = new Date(
+      info['serie_span_start'].getFullYear(),
+      info['serie_span_start'].getMonth(),
+      1
+    );
+    var serie_span_end = new Date(
+      info['serie_span_end'].getFullYear(),
+      info['serie_span_end'].getMonth(),
+      1
+    );
+    var estimation_span_start = new Date(
+      info['estimation_span_start'].getFullYear(),
+      info['estimation_span_start'].getMonth(),
+      1
+    );
+    var  estimation_span_end = new Date(
+      info['estimation_span_end'].getFullYear(),
+      info['estimation_span_end'].getMonth(),
+      1
+    );
+    d = {
+      'serie_span': ('[' + serie_span_start.toLocaleString("fr-FR", precision) + ' , '+ serie_span_end.toLocaleString("fr-FR", precision) + ']<br>(n = '+info['serie_span_n'].toString()+')'),
+      'estimation_span': ('[' + estimation_span_start.toLocaleString("fr-FR", precision) +  ' , '+ estimation_span_end.toLocaleString("fr-FR", precision) + ']<br>(n = '+info['estimation_span_n'].toString()+')')
+    } ;
+  } else {
+    var  serie_span_start = new Date(
+      info['serie_span_start'].getFullYear(),
+      info['serie_span_start'].getMonth()-2,
+      1
+    );
+    var serie_span_end = new Date(
+      info['serie_span_end'].getFullYear(),
+      info['serie_span_end'].getMonth()-2,
+      1
+    );
+    var estimation_span_start = new Date(
+      info['estimation_span_start'].getFullYear(),
+      info['estimation_span_start'].getMonth()-2,
+      1
+    );
+    var estimation_span_end = new Date(
+      info['estimation_span_end'].getFullYear(),
+      info['estimation_span_end'].getMonth()-2,
+      1
+    );
+    d = {
+      'serie_span': ('[' + serie_span_start.toLocaleString("fr-FR", precision) + ' , '+ serie_span_end.toLocaleString("fr-FR", precision) + ']<br>(n = '+info['serie_span_n'].toString()+')'),
+      'estimation_span': ('[' + estimation_span_start.toLocaleString("fr-FR", precision) +  ' , '+ estimation_span_end.toLocaleString("fr-FR", precision) + ']<br>(n = '+info['estimation_span_n'].toString()+')')
+    } ;
+  }
+  return(d) ;
+  
+}
+
+infos_serie = ({
+    i_sa: {
+      label: 'Série CVS-CJO',
+      color:'#988ed1',
+      priority :1
+    },
+    i_s: {
+      label: 'Composante saisonnière',
+      color:'#c5a8a4',
+      priority :2
+    },
+    i_t: {
+      label: 'Tendance-cycle',
+      color :'#e6c372',
+      priority :3
+    },
+    i_i: {
+      label: 'Composante irrégulière',
+      color :'#adcd8d',
+      priority :4
+    },
+    i_cal: {
+      label: 'Effets de calendrier',
+      color :'#d39e6e',
+      priority :5
+    },
+    i_ycal: {
+      label: 'Série CJO',
+      color :'#ee0000',
+      priority :7
+    }
+  } ) ; 
+    
+
+async function get_trace_jd(ws, sa_item, serie, old_new, type){
+  var requete_str = '' ;
+  if(type == 'indice'){
+    requete_str = `
+      SELECT date, value 
+       FROM jd_series 
+       WHERE ws_name = ? AND type_ws = ? AND series = ? AND component = ?
+       ORDER BY date
+    ` ;
+  } else if(type == 'evol'){
+    requete_str = `
+     SELECT date, value/value_lag1 - 1.0 as value
+     FROM jd_series 
+     LEFT JOIN  (
+        SELECT ws_name, type_ws, series, component, date + INTERVAL 1 MONTH as date, value as value_lag1
+        FROM jd_series
+     ) USING(ws_name, type_ws, series, component, date)
+     WHERE ws_name = ? AND type_ws = ? AND series = ? AND component = ?
+     ORDER BY date
+     `
+  } else {
+    requete_str = `
+     SELECT date, value/value_lag12 - 1.0 as value
+     FROM jd_series 
+     LEFT JOIN  (
+        SELECT ws_name, type_ws, series, component, date + INTERVAL 12 MONTH as date, value as value_lag12
+        FROM jd_series
+     ) USING(ws_name, type_ws, series, component, date)
+     WHERE ws_name = ? AND type_ws = ? AND series = ? AND component = ?
+     ORDER BY date
+     `
+  }
+  
+  var requete_y = await db.query(requete_str, [ws, old_new, sa_item, serie]) ;
+  var val_y = requete_y.map((y) => {
+    return y['value'] ;
+  }) ;
+  var dates = requete_y.map((y) => {
+    return y['date'] ;
+  }) ;
+  var dash = (old_new === 'new')  ? 'solid' : 'dot' ;
+  var title_gr = (old_new === 'new')  ? 'Nouveau workspace' : 'Ancien workspace' ;
+  return {
+      type: "scatter",
+      mode: "lines",
+      name: infos_serie['i_'+serie]['label'],
+      x: dates,
+      y: val_y,
+      legendgroup: old_new,
+      text: infos_serie['i_'+serie]['label'] + ' - ' + title_gr,
+      hoverinfo: "x+y+text",
+      line: {color: infos_serie['i_'+serie]['color'], dash: dash}
+  }
+}
+
+function format_stat_jd(pvalue, qualite){
+  var color = '#000000' ;
+  if(qualite === 'Severe'){
+    color = '#960000' ;
+  } else if(qualite === 'Bad'){
+    color = '#e03a3a' ;
+  } else if(qualite === 'Uncertain'){
+    color = '#f7be14' ;
+  } else if(qualite === 'Good'){
+    color = '#27b850' ;
+  }
+  return '<p style="color:'+color+'";>'+ qualite + ' ('+ pvalue+ ')</p>' ;
+}
+
+```
+
+```{ojs}
+//| echo: false
+//| output: false
+
+traces_series = [0,1,4] ;
+range_date = [
+  (await db.query(
+    `SELECT strftime(max(date) - INTERVAL 36 MONTH, '%Y-%m-%d') as val FROM jd_series`,[]
+  ))[0]['val'],
+  (await db.query(
+    `SELECT strftime(max(date), '%Y-%m-%d') as val FROM jd_series`,[]
+  ))[0]['val'],
+] ;
+```
+
+```{ojs}
+//| echo: false
+//| output: false
+
+{
+  document.addEventListener('keyup', (e) => {
+    let new_rank = -1 ;
+    let i = 0 ;
+    let size = available_series_map.length ;
+    let r = 0 ;
+    if (e.code === "KeyD"){
+      r = (selected_rank + 1) % size;
+      while(i < size && new_rank < 0){
+        if(available_series_map[r]['code'] !== selected_code_id){
+          new_rank = r ;
+        }
+        r = (r + 1) % size;
+        i = i + 1 ;
+      }
+    } else if (e.code === "KeyA") {
+      r = (((selected_rank - 1) % size) + size) % size ;
+      while(i < size && new_rank < 0){
+        if(available_series_map[r]['code'] !== selected_code_id){
+          new_rank = r ;
+        }
+        r = (((r - 1) % size) + size) % size;
+        i = i + 1 ;
+      }
+    } 
+    
+    if(new_rank >= 0){
+      default_value_input['serie_group'] = available_series_map[new_rank]['serie_group'] ;
+      default_value_input['level'] = available_series_map[new_rank]['level'] ;
+      default_value_input['code'] = available_series_map[new_rank]['code'] ;
+      
+      set_input(viewof serie_group_input, available_series_map[new_rank]['serie_group']) ;
+      set_input(viewof level_input, available_series_map[new_rank]['level']) ;
+      set_input(viewof code_input, available_series_map[new_rank]['code']) ;
+      
+    }
+  })
+}
+
+```
+
+```{ojs}
+//| echo: false
+//| output: false
+
+{
+  document.addEventListener('keyup', (e) => {
+    if (e.code === "Digit1"){
+      var element = document.querySelector("#sélection");
+      element.scrollIntoView({ behavior: 'smooth', block: 'start'});
+    } else if (e.code === "Digit2") {
+      var element = document.querySelector("#profil");
+      element.scrollIntoView({ behavior: 'smooth', block: 'start'});
+    } else if (e.code === "Digit3") {
+      var element = document.querySelector("#révisions");
+      element.scrollIntoView({ behavior: 'smooth', block: 'start'});
+    } else if (e.code === "Digit5") {
+      var element = document.querySelector("#regarima");
+      element.scrollIntoView({ behavior: 'smooth', block: 'start'});
+    } else if (e.code === "Digit6") {
+      var element = document.querySelector("#diagnostiques");
+      element.scrollIntoView({ behavior: 'smooth', block: 'start'});
+    } else if (e.code === "Digit7") {
+      var element = document.querySelector("#s-i-ratio");
+      element.scrollIntoView({ behavior: 'smooth', block: 'start'});
+    } 
+  })
+}
+
+```
+
+```{ojs}
+//| echo: false
+//| panel: input
+
+
+viewof serie_group_input = Inputs.select(
+ await get_propositions_serie_group(),
+ {
+  label: "Catégorie",
+  width: 500,
+  format: x => x.label,
+  valueof : x => x.serie_group,
+  value: default_value_input['serie_group']
+ }
+) ;
+
+viewof level_input = Inputs.select(
+  await get_propositions_levels(serie_group_input),
+  {
+    label: "Niveau",
+    width: 500,
+    format: x => x.label,
+    valueof : x => x.level,
+    value: get_default_value_level_select({...default_value_input}, serie_group_input)
+  }
+) ;
+
+viewof code_input = Inputs.select(
+  await get_propositions_codes(serie_group_input, level_input),
+  {
+    label: "Code",
+    width: 500,
+    value: get_default_value_code_select({...default_value_input}, serie_group_input, level_input)
+  }
+) ;
+```
+
+```{ojs}
+//| echo: false
+//| output: false
+
+selected_serie_group_id = serie_group_input ; 
+selected_level_id = level_input ;
+selected_code_id = code_input ;
+selected_rank = rank_mapping[get_unique_key({
+  serie_group: selected_serie_group_id,
+  level: selected_level_id,
+  code: selected_code_id
+})];
+
+
+mapping_sel = (await db.query(`
+    SELECT ws_old, sa_item_old, ws_new,	sa_item_new, label, w/total_w as weight
+    FROM (
+      SELECT serie_group, level, code, ws_old, sa_item_old, ws_new,	sa_item_new, label, weight as w
+      FROM mapping
+      WHERE serie_group = ? and level = ? and code = ?
+    ) as t1
+    LEFT JOIN (
+      SELECT serie_group, level, sum(weight) as  total_w
+      FROM mapping
+      GROUP BY serie_group, level
+    ) as t2 USING(serie_group, level)
+`,
+  [
+  selected_serie_group_id,
+  selected_level_id,
+  selected_code_id
+]))[0].toJSON() ;
+
+label_serie_sel = mapping_sel['label'] ;
+sa_item_new_sel = mapping_sel['sa_item_new'] ;
+sa_item_old_sel = mapping_sel['sa_item_old'] ;
+ws_new_sel = mapping_sel['ws_new'] ;
+ws_old_sel = mapping_sel['ws_old'] ;
+
+
+formatter_percent = new Intl.NumberFormat(undefined, {
+  style: "percent",
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2
+});
+
+
+weight_serie_sel = formatter_percent.format(mapping_sel['weight']) ;
+
+infos_old_sel = (await db.query(`
+    SELECT *
+    FROM jd_infos
+    WHERE ws_name = ? and type_ws = 'old' and series = ?
+`,
+  [
+  ws_old_sel,
+  sa_item_old_sel
+]))[0].toJSON() ;
+
+
+infos_new_sel = (await db.query(`
+    SELECT *
+    FROM jd_infos
+    WHERE ws_name = ? and type_ws = 'new' and series = ?
+`,
+  [
+  ws_new_sel,
+  sa_item_new_sel
+]))[0].toJSON() ;
+
+
+
+
+```
+
+::: {.callout-tip collapse="true"}
+### Raccourcis clavier
+
+-   La touche `D` permet de passer à la série suivante
+-   La touche `Q` permet de revenir à la série précédente
+-   Les touches `&`, `é` , `"` etc. permettent de scroller automatiquement dans les principales section de la page
+:::
+
+## Détail \${label_serie_sel}
+
+-   [Libellé]{.underline} : **\${label_serie_sel}**
+-   [Poids]{.underline} : \${weight_serie_sel}
+
+```{ojs}
+//| echo: false
+
+{
+
+  var data_generalite = [
+    {
+      'label':'Nom du workspace',
+      'old': ws_old_sel,
+      'new': ws_new_sel
+    },
+    {
+      'label':'Nom du SaItem',
+      'old': sa_item_old_sel,
+      'new': sa_item_new_sel
+    },
+    {
+      'label':'Estimation span',
+      'old': format_span(infos_old_sel)['estimation_span'],
+      'new': format_span(infos_new_sel)['estimation_span']
+    },
+    {
+      'label':'Serie span',
+      'old': format_span(infos_old_sel)['serie_span'],
+      'new': format_span(infos_new_sel)['serie_span']
+    }
+  ] ; 
+      
+  const el_td = document.createElement('div');
+  el_td.setAttribute("id", "tableau-td");
+  el_td.classList.add('table-sm');
+    
+    const table_generalite = new Tabulator(el_td, {
+      data: data_generalite,
+      maxHeight: 500,
+      layout:"fitColumns",
+      resizableRows: false,
+      columns: [
+        {title: '', field: 'label', resizable:false,  widthGrow:1, headerSort: false},
+        {title: 'Nouveau workspace', field: 'new', hozAlign:"right", formatter:"numberfmt", resizable:false,  widthGrow:1, formatter: "html", headerSort: false},
+        {title: 'Ancien workspace', field: 'old', hozAlign:"right", formatter:"numberfmt", resizable:false,  widthGrow:1, formatter: "html", headerSort: false}
+      ]
+    }) ;
+    return table_generalite.element ; 
+}
+
+```
+
+### Profil
+
+::: panel-tabset
+#### Indice
+
+```{ojs}
+//| echo: false
+
+{
+  var choix = ['sa', 't', 'ycal'] ;
+  
+  var traces_old = await Promise.all(choix.map(async (x) => {
+    return (await get_trace_jd(ws_old_sel, sa_item_old_sel, x, 'old', 'indice'))
+  })) ;
+  traces_old[0]['legendgrouptitle']  = {text: 'Ancien workspace', font: {color: 'black', size: 15}} ;
+
+  
+  var traces_new = await Promise.all(choix.map(async (x) => {
+    return (await get_trace_jd(ws_new_sel, sa_item_new_sel, x, 'new', 'indice'))
+  })) ;
+  traces_new[0]['legendgrouptitle'] = {text: 'Nouveau workspace', font: {color: 'black', size: 15}} ;
+  
+  
+  var requete_y = await db.query(`
+             SELECT date, value 
+             FROM jd_series 
+             WHERE ws_name = ? AND type_ws = ? AND series = ? AND component = 'y'
+             ORDER BY date
+       `, [ws_new_sel, 'new', sa_item_new_sel]) ;
+  var val_y = requete_y.map((y) => {
+    return y['value'] ;
+  }) ;
+  var dates = requete_y.map((y) => {
+    return y['date'] ;
+  }) ;
+  
+  var traces_brutes = {
+      type: "scatter",
+      mode: "lines",
+      name: 'Série brute',
+      x: dates,
+      y: val_y,
+      text:'Série brute',
+      hoverinfo: "x+y+text",
+      line: {color: 'black', dash: 'solid'}
+  } ;
+
+  var traces = [traces_brutes].concat(traces_new).concat(traces_old).map(
+      (x,i) => {
+        x['visible'] = ((traces_series.findIndex((y) => y === i) >= 0) ? true : 'legendonly') ;
+        return x ;
+      }
+    ) ;
+
+  var layout = {
+    title: false,
+    margin: {l: 50, r:50, b:20, t:20, pad:4},
+    width: width,
+    height: 700,
+    showlegend: true,
+    legend: {
+      orientation: "h", 
+      yanchor: "bottom",
+      y: 1.02,
+      groupclick: 'toggleitem',
+      xanchor: "right",
+      x: 1
+    },
+    hovermode: 'x',
+    hoverlabel : {namelength : -1},
+    xaxis: {
+      rangeslider: {},
+      type: 'date',
+      range: range_date
+    }
+  } ;
+  
+  var config = {locale: 'fr', displayModeBar: false};
+  
+  const div = DOM.element('div');
+  div.setAttribute("id", "divSeriesPlotly");
+  Plotly.newPlot(div, traces, layout, config);
+  
+  div.on('plotly_legendclick', function(data){
+    var update = {visible:"true"};
+    if(data['fullData'][data.curveNumber]['visible'] === 'legendonly'){
+      traces_series.push(data.curveNumber) ;
+    } else {
+      update = {visible:"legendonly"} ;
+      var i  = traces_series.findIndex((x) => {return x === data.curveNumber}) ;
+      traces_series.splice(i, 1);
+    }
+    
+    Plotly.restyle('divSeriesPlotly', update,[data.curveNumber]);
+    return false;
+  });
+  
+  div.on('plotly_relayout', function(data){
+    if(data.hasOwnProperty('xaxis.range')){
+      range_date[0] = data['xaxis.range'][0] ;
+      range_date[1] = data['xaxis.range'][1] ;
+      generer_tableau_revision(range_date) ;
+    }
+    return false;
+  });
+  
+  return div ;
+}
+
+```
+
+#### Évolutions mensuelles M/M-1
+
+```{ojs}
+//| echo: false
+
+{
+  var choix = ['sa', 't', 'ycal'] ;
+  
+  var traces_old = await Promise.all(choix.map(async (x) => {
+    return (await get_trace_jd(ws_old_sel, sa_item_old_sel, x, 'old', 'evol'))
+  })) ;
+  traces_old[0]['legendgrouptitle']  = {text: 'Ancien workspace', font: {color: 'black', size: 15}} ;
+
+  
+  var traces_new = await Promise.all(choix.map(async (x) => {
+    return (await get_trace_jd(ws_new_sel, sa_item_new_sel, x, 'new', 'evol'))
+  })) ;
+  traces_new[0]['legendgrouptitle'] = {text: 'Nouveau workspace', font: {color: 'black', size: 15}} ;
+  
+  
+  var requete_y = await db.query(`
+             SELECT date, value/value_lag1 - 1.0 as value
+             FROM jd_series 
+             LEFT JOIN  (
+                SELECT ws_name, type_ws, series, component, date + INTERVAL 1 MONTH as date, value as value_lag1
+                FROM jd_series
+             ) USING(ws_name, type_ws, series, component, date)
+             WHERE ws_name = ? AND type_ws = ? AND series = ? AND component = 'y'
+            ORDER BY date
+       `, [ws_new_sel, 'new', sa_item_new_sel]) ;
+  var val_y = requete_y.map((y) => {
+    return y['value'] ;
+  }) ;
+  var dates = requete_y.map((y) => {
+    return y['date'] ;
+  }) ;
+  
+  var traces_brutes = {
+      type: "scatter",
+      mode: "lines",
+      name: 'Série brute',
+      x: dates,
+      y: val_y,
+      text:'Série brute',
+      hoverinfo: "x+y+text",
+      line: {color: 'black', dash: 'solid'}
+  } ;
+
+  var traces = [traces_brutes].concat(traces_new).concat(traces_old).map(
+      (x,i) => {
+        x['visible'] = ((traces_series.findIndex((y) => y === i) >= 0) ? true : 'legendonly') ;
+        return x ;
+      }
+    ) ;
+
+  var layout = {
+    title: false,
+    margin: {l: 50, r:50, b:20, t:20, pad:4},
+    width: width,
+    height: 700,
+    showlegend: true,
+    legend: {
+      orientation: "h", 
+      yanchor: "bottom",
+      y: 1.02,
+      groupclick: 'toggleitem',
+      xanchor: "right",
+      x: 1
+    },
+    hovermode: 'x',
+    hoverlabel : {namelength : -1},
+    xaxis: {
+      rangeslider: {},
+      type: 'date',
+      range: range_date
+    }
+  } ;
+  
+  var config = {locale: 'fr', displayModeBar: false};
+  
+  const div = DOM.element('div');
+  div.setAttribute("id", "divSeriesPlotly");
+  Plotly.newPlot(div, traces, layout, config);
+  
+  div.on('plotly_legendclick', function(data){
+    var update = {visible:"true"};
+    if(data['fullData'][data.curveNumber]['visible'] === 'legendonly'){
+      traces_series.push(data.curveNumber) ;
+    } else {
+      update = {visible:"legendonly"} ;
+      var i  = traces_series.findIndex((x) => {return x === data.curveNumber}) ;
+      traces_series.splice(i, 1);
+    }
+    
+    Plotly.restyle('divSeriesPlotly', update,[data.curveNumber]);
+    return false;
+  });
+  
+  div.on('plotly_relayout', function(data){
+    if(data.hasOwnProperty('xaxis.range')){
+      range_date[0] = data['xaxis.range'][0] ;
+      range_date[1] = data['xaxis.range'][1] ;
+    }
+    return false;
+  });
+  
+  return div ;
+}
+
+```
+
+#### Glissements annuels
+
+```{ojs}
+//| echo: false
+{
+  var choix = ['sa', 't', 'ycal'] ;
+  
+  var traces_old = await Promise.all(choix.map(async (x) => {
+    return (await get_trace_jd(ws_old_sel, sa_item_old_sel, x, 'old', 'yoy'))
+  })) ;
+  traces_old[0]['legendgrouptitle']  = {text: 'Ancien workspace', font: {color: 'black', size: 15}} ;
+
+  
+  var traces_new = await Promise.all(choix.map(async (x) => {
+    return (await get_trace_jd(ws_new_sel, sa_item_new_sel, x, 'new', 'yoy'))
+  })) ;
+  traces_new[0]['legendgrouptitle'] = {text: 'Nouveau workspace', font: {color: 'black', size: 15}} ;
+  
+  
+  var requete_y = await db.query(`
+             SELECT date, value/value_lag12 - 1.0 as value
+             FROM jd_series 
+             LEFT JOIN  (
+                SELECT ws_name, type_ws, series, component, date + INTERVAL 12 MONTH as date, value as value_lag12
+                FROM jd_series
+             ) USING(ws_name, type_ws, series, component, date)
+             WHERE ws_name = ? AND type_ws = ? AND series = ? AND component = 'y'
+            ORDER BY date
+       `, [ws_new_sel, 'new', sa_item_new_sel]) ;
+  var val_y = requete_y.map((y) => {
+    return y['value'] ;
+  }) ;
+  var dates = requete_y.map((y) => {
+    return y['date'] ;
+  }) ;
+  
+  var traces_brutes = {
+      type: "scatter",
+      mode: "lines",
+      name: 'Série brute',
+      x: dates,
+      y: val_y,
+      text:'Série brute',
+      hoverinfo: "x+y+text",
+      line: {color: 'black', dash: 'solid'}
+  } ;
+
+  var traces = [traces_brutes].concat(traces_new).concat(traces_old).map(
+      (x,i) => {
+        x['visible'] = ((traces_series.findIndex((y) => y === i) >= 0) ? true : 'legendonly') ;
+        return x ;
+      }
+    ) ;
+
+  var layout = {
+    title: false,
+    margin: {l: 50, r:50, b:20, t:20, pad:4},
+    width: width,
+    height: 700,
+    showlegend: true,
+    legend: {
+      orientation: "h", 
+      yanchor: "bottom",
+      y: 1.02,
+      groupclick: 'toggleitem',
+      xanchor: "right",
+      x: 1
+    },
+    hovermode: 'x',
+    hoverlabel : {namelength : -1},
+    xaxis: {
+      rangeslider: {},
+      type: 'date',
+      range: range_date
+    }
+  } ;
+  
+  var config = {locale: 'fr', displayModeBar: false};
+  
+  const div = DOM.element('div');
+  div.setAttribute("id", "divSeriesPlotly");
+  Plotly.newPlot(div, traces, layout, config);
+  
+  div.on('plotly_legendclick', function(data){
+    var update = {visible:"true"};
+    if(data['fullData'][data.curveNumber]['visible'] === 'legendonly'){
+      traces_series.push(data.curveNumber) ;
+    } else {
+      update = {visible:"legendonly"} ;
+      var i  = traces_series.findIndex((x) => {return x === data.curveNumber}) ;
+      traces_series.splice(i, 1);
+    }
+    
+    Plotly.restyle('divSeriesPlotly', update,[data.curveNumber]);
+    return false;
+  });
+  
+  div.on('plotly_relayout', function(data){
+    if(data.hasOwnProperty('xaxis.range')){
+      range_date[0] = data['xaxis.range'][0] ;
+      range_date[1] = data['xaxis.range'][1] ;
+    }
+    return false;
+  });
+  
+  return div ;
+}
+
+```
+:::
+
+### Révisions
+
+```{ojs}
+//| echo: false
+
+viewof table_revision = {
+  return html`<div id="tableau-revision-parent"></div>`;
+}
+  
+```
+
+```{ojs}
+//| echo: false
+//| output: false
+
+function format_mar(val){
+  if(val == null){
+    return '-' ;
+  } else {
+    return val.toLocaleString(
+          'fr-FR',
+          { minimumFractionDigits: 2, maximumFractionDigits: 2}
+    ) ;
+  }
+}
+
+
+
+function format_rmar(val){
+  const percentFormatter = new Intl.NumberFormat(
+      'fr-FR',
+      { style: 'percent', minimumFractionDigits: 1 }
+  );
+  
+  if(val == null){
+    return '-' ;
+  } else {
+    return percentFormatter.format(val) ;
+  }
+}
+
+function format_span_revision(start_date, end_date, period){
+  if(start_date == null){
+    return '-' ;
+  } else {
+    return '[' + start_date.toLocaleDateString('fr-FR', { month: '2-digit', year: 'numeric' }) + ' , ' + end_date.toLocaleDateString('fr-FR', { month: '2-digit', year: 'numeric' }) +  ']' ;
+  }
+}
+
+
+async function generer_tableau_revision(range_date){
+  var data_revision = (await db.query(` 
+                                    SELECT 
+                                    min(date) FILTER (indice_new is not null and indice_old is not null) as borne_inf_date_indice,
+                                    max(date) FILTER (indice_new is not null and indice_old is not null) as borne_sup_date_indice,
+                                    min(date) FILTER (evol_new is not null and evol_old is not null) as borne_inf_date_evol,
+                                    max(date) FILTER (evol_new is not null and evol_old is not null) as borne_sup_date_evol,
+                                    min(date) FILTER (yoy_new is not null and yoy_old is not null) as borne_inf_date_yoy,
+                                    max(date) FILTER (yoy_new is not null and yoy_old is not null) as borne_sup_date_yoy,
+                                    CASE WHEN
+                                    sum(CAST(indice_new is not null and indice_old is not null AS INTEGER))= 0
+                                    THEN
+                                    NULL
+                                    ELSE
+                                    sum(abs(coalesce(indice_new-indice_old,0)))/sum(CAST(indice_new is not null and indice_old is not null AS INTEGER))
+                                    END as mar_indice,
+                                    CASE WHEN
+                                    sum(CAST(indice_new is not null and indice_old is not null AS INTEGER)) = 0
+                                    THEN
+                                    NULL
+                                    ELSE
+                                    sum(abs(coalesce(indice_new-indice_old,0)))/sum(abs(coalesce(indice_new-indice_old+indice_old,0)))
+                                    END as rmar_indice,
+                                    CASE WHEN
+                                    sum(cast(evol_new is not null and evol_old is not null as INTEGER)) = 0
+                                    THEN
+                                    NULL
+                                    ELSE
+                                    sum(abs(coalesce(evol_new-evol_old,0)))/sum(cast(evol_new is not null and evol_old is not null as integer))
+                                    END as mar_evol,
+                                    CASE WHEN
+                                    sum(cast(evol_new is not null and evol_old is not null as integer)) = 0
+                                    THEN
+                                    NULL
+                                    ELSE
+                                    sum(abs(coalesce(evol_new-evol_old,0)))/sum(abs(coalesce(evol_new-evol_old+evol_old,0)))
+                                    END as rmar_evol,
+                                    CASE WHEN
+                                    sum(cast(yoy_new is not null and yoy_old is not null as integer)) = 0
+                                    THEN
+                                    NULL
+                                    ELSE
+                                    sum(abs(coalesce(yoy_new-yoy_old,0)))/sum(cast(yoy_new is not null and yoy_old is not null as integer))
+                                    END as mar_yoy,
+                                    CASE WHEN
+                                    sum(cast(yoy_new is not null and yoy_old is not null as integer)) = 0
+                                    THEN
+                                    NULL
+                                    ELSE
+                                    sum(abs(coalesce(yoy_new-yoy_old,0)))/sum(abs(coalesce(yoy_new-yoy_old+yoy_old,0)))
+                                    END as rmar_yoy
+                                    FROM (
+                                      SELECT
+                                      component,
+                                      date,
+                                      value as indice_new,
+                                      value/value_new_lag1-1.0 as evol_new,
+                                      value/value_new_lag12-1.0 as yoy_new
+                                      FROM jd_series 
+                                      LEFT JOIN (
+                                        SELECT component, date + INTERVAL 1 MONTH as date, value as value_new_lag1
+                                        FROM jd_series 
+                                        WHERE ws_name = ? AND series = ? AND
+                                        component in ('ycal', 'sa') AND type_ws = 'new'
+                                      ) as t1 USING(component, date)
+                                      LEFT JOIN (
+                                        SELECT component, date + INTERVAL 12 MONTH as date, value as value_new_lag12
+                                        FROM jd_series 
+                                        WHERE ws_name = ? AND series = ? AND
+                                        component in ('ycal', 'sa') AND type_ws = 'new'
+                                      ) as t2 USING(component, date)
+                                      WHERE ws_name = ? AND series = ? AND
+                                      component in ('ycal', 'sa') AND type_ws = 'new'
+                                    ) as t_new
+                                    FULL JOIN (
+                                      SELECT
+                                      component,
+                                      date,
+                                      value as indice_old,
+                                      value/value_old_lag1-1.0 as evol_old,
+                                      value/value_old_lag12-1.0 as yoy_old
+                                      FROM jd_series 
+                                      LEFT JOIN (
+                                        SELECT component, date + INTERVAL 1 MONTH as date, value as value_old_lag1
+                                        FROM jd_series 
+                                        WHERE ws_name = ? AND series = ? AND
+                                        component in ('ycal', 'sa') AND type_ws = 'old'
+                                      ) as t1 USING(component, date)
+                                      LEFT JOIN (
+                                        SELECT component, date + INTERVAL 12 MONTH as date, value as value_old_lag12
+                                        FROM jd_series 
+                                        WHERE ws_name = ? AND series = ? AND
+                                        component in ('ycal', 'sa') AND type_ws = 'old'
+                                      ) as t2 USING(component, date)
+                                      WHERE ws_name = ? AND series = ? AND
+                                      component in ('ycal', 'sa') AND type_ws = 'old'
+                                    ) as t_old USING(component, date)
+                                    WHERE date >= CAST(? AS DATE) and date <= CAST(? AS DATE)
+                                    GROUP BY component
+                                    ORDER BY component`,
+                                    [
+                                      ws_new_sel,
+                                      sa_item_new_sel,
+                                      ws_new_sel,
+                                      sa_item_new_sel,
+                                      ws_new_sel,
+                                      sa_item_new_sel,
+                                      ws_old_sel,
+                                      sa_item_old_sel,
+                                      ws_old_sel,
+                                      sa_item_old_sel,
+                                      ws_old_sel,
+                                      sa_item_old_sel,
+                                      range_date[0],
+                                      range_date[1]
+                                    ]
+)) ;
+
+  
+
+  var data_revision_bis = [
+    {
+      component: 'CVS-CJO',
+      indicateur: 'Indice',
+      periode: format_span_revision(
+        data_revision[0]['borne_inf_date_indice'],
+        data_revision[0]['borne_sup_date_indice'],
+        infos_new_sel['period']
+      ),
+      mar: format_mar(data_revision[0]['mar_indice']),
+      rmar: format_rmar(data_revision[0]['rmar_indice'])
+    },
+    {
+      component: 'CVS-CJO',
+      indicateur: 'Évolution M/M-1',
+      periode: format_span_revision(
+        data_revision[0]['borne_inf_date_evol'],
+        data_revision[0]['borne_sup_date_evol'],
+        infos_new_sel['period']
+      ),
+      mar: format_mar(data_revision[0]['mar_evol']),
+      rmar: format_rmar(data_revision[0]['rmar_evol'])
+    },
+    {
+      component: 'CVS-CJO',
+      indicateur: 'Glissement annuel',
+      periode: format_span_revision(
+        data_revision[0]['borne_inf_date_yoy'],
+        data_revision[0]['borne_sup_date_yoy'],
+        infos_new_sel['period']
+      ),
+      mar: format_mar(data_revision[0]['mar_yoy']),
+      rmar: format_rmar(data_revision[0]['rmar_yoy'])
+    },
+    {
+      component: 'CJO',
+      indicateur: 'Indice',
+      periode: format_span_revision(
+        data_revision[1]['borne_inf_date_indice'],
+        data_revision[1]['borne_sup_date_indice'],
+        infos_new_sel['period']
+      ),
+      mar: format_mar(data_revision[1]['mar_indice']),
+      rmar: format_rmar(data_revision[1]['rmar_indice'])
+    },
+    {
+      component: 'CJO',
+      indicateur: 'Évolution M/M-1',
+      periode: format_span_revision(
+        data_revision[1]['borne_inf_date_evol'],
+        data_revision[1]['borne_sup_date_evol'],
+        infos_new_sel['period']
+      ),
+      mar: format_mar(data_revision[1]['mar_evol']),
+      rmar: format_rmar(data_revision[1]['rmar_evol'])
+    },
+    {
+      component: 'CJO',
+      indicateur: 'Glissement annuel',
+      periode: format_span_revision(
+        data_revision[1]['borne_inf_date_yoy'],
+        data_revision[1]['borne_sup_date_yoy'],
+        infos_new_sel['period']
+      ),
+      mar: format_mar(data_revision[1]['mar_yoy']),
+      rmar: format_rmar(data_revision[1]['rmar_yoy'])
+    }
+    
+  ] ;
+  
+  const el_revision = document.createElement('div');
+  el_revision.setAttribute("id", "tableau-revision");
+  el_revision.classList.add('table-sm');
+  
+  const table_revision = new Tabulator(el_revision, {
+    data: data_revision_bis,
+    layout:"fitColumns",
+    resizableRows: false,
+    groupBy:"component",
+    columns: [
+      {title: 'Indicateur', field: 'indicateur', resizable:false,  widthGrow:3, headerSort: false},
+      {title: 'Période', field: 'periode', resizable:false,  widthGrow:3, headerSort: false},
+      {title: 'MAR', field: 'mar', hozAlign:"right", resizable:false,  widthGrow:1, formatter: "html", headerSort: false},
+      {title: 'RMAR', field: 'rmar', hozAlign:"right", resizable:false,  widthGrow:1, formatter: "html", headerSort: false}
+    ]
+  }) ;
+  
+  const element = document.getElementById('tableau-revision');
+  element?.remove();
+  document.getElementById("tableau-revision-parent").appendChild(table_revision.element) ; 
+}
+
+await generer_tableau_revision(range_date) ;
+
+```
+
+### RegArima
+
+#### Généralités
+
+```{ojs}
+//| echo: false
+{
+  
+  var data_qualite = [
+    {
+      label: 'Modèle SARIMA',
+      old_res: infos_old_sel['arima_model'],
+      new_res: infos_new_sel['arima_model']
+    },
+    {
+      label: 'Transformation',
+      old_res: (infos_old_sel['log'] === 1) ? 'Modèle multiplicatif' : 'Modèle additif',
+      new_res: (infos_new_sel['log'] === 1) ? 'Modèle multiplicatif' : 'Modèle additif'
+    },
+    {
+      label:'Effet Pâques',
+      old_res: infos_old_sel['easter'] == 1 ? String.fromCodePoint(0x2705) : String.fromCodePoint(0x274C),
+      new_res: infos_new_sel['easter'] == 1 ? String.fromCodePoint(0x2705) : String.fromCodePoint(0x274C)
+    },
+    {
+      label:'Estimation span',
+      old_res: format_span(infos_old_sel)['estimation_span'],
+      new_res: format_span(infos_new_sel)['estimation_span']
+    },
+  ] ;
+  
+  const el_qual = document.createElement('div');
+  el_qual.setAttribute("id", "tableau-qualite");
+  el_qual.classList.add('table-sm');
+  
+  const table_qual = new Tabulator(el_qual, {
+    data: data_qualite,
+    layout:"fitColumns",
+    resizableRows: false,
+    columns: [
+      {title: '', field: 'label', resizable:false,  widthGrow:1, headerSort: false},
+      {title: 'Nouveau workspace', field: 'new_res', hozAlign:"left", resizable:false,  widthGrow:1, formatter: "html", headerSort: false},
+      {title: 'Ancien workspace', field: 'old_res', hozAlign:"left", resizable:false,  widthGrow:1, formatter: "html", headerSort: false}
+    ]
+  }) ;
+  return table_qual.element ; 
+  
+}
+```
+
+#### Régresseurs de calendrier
+
+```{ojs}
+//| echo: false
+
+{
+
+  var data_td = (await db.query(`
+    SELECT 
+        label,
+        priority_new is not NULL as new_present,
+        priority_old is not NULL as old_present,
+        CASE WHEN
+          priority_new is NULL
+        THEN priority_old
+        ELSE
+          CASE WHEN
+            priority_old is NULL
+          THEN
+            priority_new
+          ELSE 
+            CASE WHEN
+              priority_old < priority_new
+            THEN priority_old
+            ELSE priority_new
+            END
+          END
+        END as priority
+    FROM (
+      SELECT label, min(priority) as priority_new
+      FROM jd_td
+      LEFT JOIN jd_td_labels USING(td)
+      WHERE ws_name = ? AND series = ? AND type_ws = 'new'
+      GROUP BY label
+    ) as t_new
+    FULL JOIN (
+      SELECT label, min(priority) as priority_old
+      FROM jd_td
+      LEFT JOIN jd_td_labels USING(td)
+      WHERE ws_name = ? AND series = ? AND type_ws = 'old'
+      GROUP BY label
+    ) as t_old USING(label)`,
+    [ws_new_sel, sa_item_new_sel, ws_old_sel, sa_item_old_sel])).map(
+        (y) => {
+           var x = y.toJSON() ;
+           x['present_new'] = x['new_present'] ? String.fromCodePoint(0x2705) : String.fromCodePoint(0x274C) ; 
+           x['present_old'] = x['old_present'] ? String.fromCodePoint(0x2705) : String.fromCodePoint(0x274C) ; 
+           return x ;
+        }
+    ).sort(
+          function(x,y){
+                return x['priority']-y['priority'] ;
+          }
+    ) ;
+  
+  const el_td = document.createElement('div');
+  el_td.setAttribute("id", "tableau-td");
+  el_td.classList.add('table-sm');
+  
+  const table_td = new Tabulator(el_td, {
+    data: data_td,
+    maxHeight: 500,
+    layout:"fitColumns",
+    resizableRows: false,
+    columns: [
+      {title: 'Régresseur', field: 'label', resizable:false,  widthGrow:1, headerSort: false},
+      {title: 'Présent dans<br>le nouveau workspace', field: 'present_new', hozAlign:"center", formatter:"numberfmt", resizable:false,  widthGrow:1, formatter: "html", headerSort: false},
+      {title: 'Présent dans<br>l\'ancien workspace', field: 'present_old', hozAlign:"center", formatter:"numberfmt", resizable:false,  widthGrow:1, formatter: "html", headerSort: false}
+    ]
+  }) ;
+  return table_td.element ; 
+}
+
+```
+
+#### Outliers
+
+```{ojs}
+//| echo: false
+
+
+{
+  var data_outlier = (await db.query(`
+      SELECT 
+        date_outlier,
+        type_outlier,
+        present_new is not NULL as present_new,
+        present_old is not NULL as present_old
+    FROM (
+      SELECT date_outlier, type_outlier, true as present_new 
+      FROM jd_outliers
+      WHERE ws_name = ? AND series = ? AND type_ws = 'new'
+      GROUP BY date_outlier, type_outlier
+    ) as t_new
+    FULL JOIN (
+      SELECT date_outlier, type_outlier, true as present_old
+      FROM jd_outliers
+      WHERE ws_name = ? AND series = ? AND type_ws = 'new'
+      GROUP BY date_outlier, type_outlier
+    ) as t_old USING(date_outlier, type_outlier)
+    ORDER BY date_outlier, type_outlier`,
+    [ws_new_sel, sa_item_new_sel, ws_old_sel, sa_item_old_sel])).map(
+      (y) => {
+           var x = y.toJSON() ;
+           x['present_new'] = x['present_new'] ? String.fromCodePoint(0x2705) : String.fromCodePoint(0x274C) ; 
+           x['present_old'] = x['present_old'] ? String.fromCodePoint(0x2705) : String.fromCodePoint(0x274C) ; 
+           return x ;
+      }
+    );
+  
+  const el_outlier = document.createElement('div');
+  el_outlier.setAttribute("id", "tableau-outlier");
+  el_outlier.classList.add('table-sm');
+  
+  const table_outlier = new Tabulator(el_outlier, {
+    data: data_outlier,
+    maxHeight: 500,
+    layout:"fitColumns",
+    resizableRows: false,
+    columns: [
+      {title: 'Mois', field: 'date_outlier', resizable:false,  headerSort: false,  widthGrow:1},
+      {title: 'Type d\'outlier', field: 'type_outlier', resizable:false,  widthGrow:1, headerSort: false},
+      {title: 'Présent dans<br>le nouveau workspace', field: 'present_new', hozAlign:"center", formatter:"numberfmt", resizable:false,  widthGrow:1, formatter: "html", headerSort: false},
+      {title: 'Présent dans<br>l\'ancien workspace', field: 'present_old', hozAlign:"center", formatter:"numberfmt", resizable:false,  widthGrow:1, formatter: "html", headerSort: false}
+    ]
+  }) ;
+  return table_outlier.element ; 
+}
+
+```
+
+#### Analyse des résidus
+
+```{ojs}
+//| echo: false
+{
+  
+  var data_qualite = [
+    {
+      label: 'Normalité des résidus<br>(Doornik-Hansen test)',
+      old_res: format_stat_jd(infos_old_sel['residuals_doornikhansen_pvalue'], infos_old_sel['residuals_doornikhansen_modality']),
+      new_res: format_stat_jd(infos_new_sel['residuals_doornikhansen_pvalue'], infos_new_sel['residuals_doornikhansen_modality'])
+    },
+    {
+      label: 'Kurtosis/Aplatissement',
+      old_res: format_stat_jd(infos_old_sel['residuals_kurtosis_pvalue'], infos_old_sel['residuals_kurtosis_modality']),
+      new_res: format_stat_jd(infos_new_sel['residuals_kurtosis_pvalue'], infos_new_sel['residuals_kurtosis_modality'])
+    },
+    {
+      label: 'Skewness/Asymétrie',
+      old_res: format_stat_jd(infos_old_sel['residuals_skewness_pvalue'], infos_old_sel['residuals_skewness_modality']),
+      new_res: format_stat_jd(infos_new_sel['residuals_skewness_pvalue'], infos_new_sel['residuals_skewness_modality'])
+    },
+    {
+      label: 'Indépendance des résidus<br>(Ljung-Box test)',
+      old_res: format_stat_jd(infos_old_sel['residuals_lb_pvalue'], infos_old_sel['residuals_lb_modality']),
+      new_res: format_stat_jd(infos_new_sel['residuals_lb_pvalue'], infos_new_sel['residuals_lb_modality'])
+    },
+    {
+      label: 'Linéarité des résidus<br>(Ljung-Box test)',
+      old_res: format_stat_jd(infos_old_sel['residuals_lb2_pvalue'], infos_old_sel['residuals_lb2_modality']),
+      new_res: format_stat_jd(infos_new_sel['residuals_lb2_pvalue'], infos_new_sel['residuals_lb2_modality'])
+    }
+  ] ;
+  
+  const el_qual = document.createElement('div');
+  el_qual.setAttribute("id", "tableau-qualite");
+  el_qual.classList.add('table-sm');
+  
+  const table_qual = new Tabulator(el_qual, {
+    data: data_qualite,
+    layout:"fitColumns",
+    resizableRows: false,
+    columns: [
+      {title: '', field: 'label', resizable:false,  widthGrow:3, headerSort: false, formatter: "html"},
+      {title: 'Nouveau workspace', field: 'new_res', hozAlign:"left", resizable:false,  widthGrow:1, formatter: "html", headerSort: false},
+      {title: 'Ancien workspace', field: 'old_res', hozAlign:"left", resizable:false,  widthGrow:1, formatter: "html", headerSort: false}
+    ]
+  }) ;
+  return table_qual.element ; 
+  
+}
+
+```
+
+### Diagnostiques
+
+```{ojs}
+//| echo: false
+{
+  
+  var data_qualite = [
+    {
+      label: 'Présence de saisonnalité résiduelle<br>dans la série CVS-CJO (QS Test)',
+      old_res: format_stat_jd(infos_old_sel['qs_residuals_sa_on_sa_pvalue'], infos_old_sel['qs_residuals_sa_on_sa_modality']),
+      new_res: format_stat_jd(infos_new_sel['qs_residuals_sa_on_sa_pvalue'], infos_new_sel['qs_residuals_sa_on_sa_modality'])
+    },
+    {
+      label: 'Présence de saisonnalité résiduelle<br>dans la série CVS-CJO (F Test)',
+      old_res: format_stat_jd(infos_old_sel['f_residuals_sa_on_sa_pvalue'], infos_old_sel['f_residuals_sa_on_sa_modality']),
+      new_res: format_stat_jd(infos_new_sel['f_residuals_sa_on_sa_pvalue'], infos_new_sel['f_residuals_sa_on_sa_modality'])
+    },
+    {
+      label: 'Présence de saisonnalité résiduelle<br>dans la composante irrégulière (QS Test)',
+      old_res: format_stat_jd(infos_old_sel['qs_residuals_sa_on_i_pvalue'], infos_old_sel['qs_residuals_sa_on_i_modality']),
+      new_res: format_stat_jd(infos_new_sel['qs_residuals_sa_on_i_pvalue'], infos_new_sel['qs_residuals_sa_on_i_modality'])
+    },
+    {
+      label: 'Présence de saisonnalité résiduelle<br>dans la composante irrégulière (F Test)',
+      old_res: format_stat_jd(infos_old_sel['f_residuals_sa_on_i_pvalue'], infos_old_sel['f_residuals_sa_on_i_modality']),
+      new_res: format_stat_jd(infos_new_sel['f_residuals_sa_on_i_pvalue'], infos_new_sel['f_residuals_sa_on_i_modality'])
+    },
+    {
+      label: 'Présence d\'effets de calendriers résiduels<br>dans la série CVS-CJO (F Test)',
+      old_res: format_stat_jd(infos_old_sel['f_residuals_td_on_sa_pvalue'], infos_old_sel['f_residuals_td_on_sa_modality']),
+      new_res: format_stat_jd(infos_new_sel['f_residuals_td_on_sa_pvalue'], infos_new_sel['f_residuals_td_on_sa_modality'])
+    },
+    {
+      label: 'Présence d\'effets de calendriers résiduels<br>dans la composante irrégulière (F Test)',
+      old_res: format_stat_jd(infos_old_sel['f_residuals_td_on_i_pvalue'], infos_old_sel['f_residuals_td_on_i_modality']),
+      new_res: format_stat_jd(infos_new_sel['f_residuals_td_on_i_pvalue'], infos_new_sel['f_residuals_td_on_i_modality'])
+    },
+    {
+      label: 'M7<br>Saisonnalité identifiable',
+      old_res: format_stat_jd(infos_old_sel['m7'], infos_old_sel['m7_quality']),
+      new_res: format_stat_jd(infos_new_sel['m7'], infos_new_sel['m7_quality'])
+    },
+    {
+      label: 'Indicateur de qualité composite Q',
+      old_res: format_stat_jd(infos_old_sel['q_stat'], infos_old_sel['q_stat_modality']),
+      new_res: format_stat_jd(infos_new_sel['q_stat'], infos_new_sel['q_stat_modality'])
+    },
+    {
+      label: 'Indicateur de qualité composite Q-M2',
+      old_res: format_stat_jd(infos_old_sel['q_m2_stat'], infos_old_sel['q_m2_stat_modality']),
+      new_res: format_stat_jd(infos_new_sel['q_m2_stat'], infos_new_sel['q_m2_stat_modality'])
+    }
+  ] ;
+  
+  const el_qual = document.createElement('div');
+  el_qual.setAttribute("id", "tableau-qualite");
+  el_qual.classList.add('table-sm');
+  
+  const table_qual = new Tabulator(el_qual, {
+    data: data_qualite,
+    layout:"fitColumns",
+    resizableRows: false,
+    columns: [
+      {title: '', field: 'label', resizable:false,  widthGrow:3, headerSort: false, formatter: "html"},
+      {title: 'Nouveau workspace', field: 'new_res', hozAlign:"left", resizable:false,  widthGrow:1, formatter: "html", headerSort: false},
+      {title: 'Ancien workspace', field: 'old_res', hozAlign:"left", resizable:false,  widthGrow:1, formatter: "html", headerSort: false}
+    ]
+  }) ;
+  return table_qual.element ; 
+  
+}
+
+```
+
+### S-I Ratio
+
+```{ojs}
+//| echo: false
+
+choix_ws_siratio = [72, 73] ;
+
+{
+  var data_si = (await db.query(`
+      SELECT 
+        mois,
+        list(CAST(annee as varchar) ORDER BY annee) as annee,
+        list(s_new ORDER BY date) as s_new,
+        list(s_old ORDER BY date) as s_old,
+        list(si_new ORDER BY date) as si_new,
+        list(si_old ORDER BY date) as si_old,
+        mean(s_new) as s_new_mean,
+        mean(s_old) as s_old_mean
+      FROM (
+        SELECT 
+            date,
+            si_new,
+            s_new,
+            i_new,
+            si_old,
+            s_old,
+            i_old,
+            extract('year' FROM date) as annee,
+            extract('month' FROM date) as mois
+        FROM (
+          SELECT
+            date,
+            ?*product(value)+(1-?)*sum(value) as si_new,
+            sum(CASE WHEN component ='s' THEN value ELSE 0 END) as s_new,
+            sum(CASE WHEN component ='i' THEN value ELSE 0 END) as i_new,
+          FROM jd_series
+          WHERE ws_name = ? AND type_ws = 'new' AND series = ? AND component in ('s', 'i')
+          GROUP BY date
+        ) as t_new
+        FULL JOIN (
+          SELECT
+            date,
+            ?*product(value)+(1-?)*sum(value) as si_old,
+            sum(CASE WHEN component ='s' THEN value ELSE 0 END) as s_old,
+            sum(CASE WHEN component ='i' THEN value ELSE 0 END) as i_old,
+          FROM jd_series
+          WHERE ws_name = ? AND type_ws = 'old' AND series = ?  AND component in ('s', 'i')
+          GROUP BY date
+        ) as t_old USING(date)
+      ) as t
+      GROUP by mois
+      ORDER BY mois`,
+      [
+        infos_new_sel['log'] ,
+        infos_new_sel['log'] ,
+        ws_new_sel,
+        sa_item_new_sel,
+        infos_old_sel['log'] ,
+        infos_old_sel['log'] ,
+        ws_old_sel,
+        sa_item_old_sel
+      ])) ;
+  
+  
+  var traces =  data_si.map((el) => {
+    return ([
+       {
+        x: Array(el['annee'].length).fill(0).map((j,i) => parseInt(el['annee'].get(i))),
+        y: Array(el['annee'].length).fill(el['s_old_mean']),
+        type: "scatter",
+        mode: "lines",
+        hoverinfo: "x+y+text",
+        xaxis: 'x'+el['mois'],
+        yaxis: 'y',
+        visible: choix_ws_siratio.includes(73),
+        showlegend: false,
+        text: 'Composante saisonnière moyenne - Ancien workspace',
+        line: {color: '#e6c372', dash: 'dot'}
+      },
+      {
+        x: Array(el['annee'].length).fill(0).map((j,i) => parseInt(el['annee'].get(i))),
+        y: Array(el['annee'].length).fill(el['s_new_mean']),
+        type: "scatter",
+        mode: "lines",
+        hoverinfo: "x+y+text",
+        xaxis: 'x'+el['mois'],
+        yaxis: 'y',
+        visible: choix_ws_siratio.includes(72),
+        showlegend: false,
+        text: 'Composante saisonnière moyenne - Nouveau workspace',
+        line: {color: '#988ed1', dash: 'dot'}
+      },
+      {
+        x: Array(el['annee'].length).fill(0).map((j,i) => parseInt(el['annee'].get(i))),
+        y: Array(el['annee'].length).fill(0).map((j,i) => el['si_old'].get(i)),
+        type: "scatter",
+        mode: 'markers',
+        hoverinfo: "x+y+text",
+        xaxis: 'x'+el['mois'],
+        yaxis: 'y',
+        text: 'SI - Ancien workspace',
+        visible: choix_ws_siratio.includes(73),
+        showlegend: false,
+        marker: {color: '#e6c372', dash: 'solid', size: 3}
+      },
+      {
+        x: Array(el['annee'].length).fill(0).map((j,i) => parseInt(el['annee'].get(i))),
+        y: Array(el['annee'].length).fill(0).map((j,i) => el['si_new'].get(i)),
+        type: "scatter",
+        mode: 'markers',
+        hoverinfo: "x+y+text",
+        xaxis: 'x'+el['mois'],
+        yaxis: 'y',
+        text: 'SI - Nouveau workspace',
+        visible: choix_ws_siratio.includes(72),
+        showlegend: false,
+        marker: {color: '#988ed1', dash: 'solid', size: 3}
+      },
+      
+      {
+        x: Array(el['annee'].length).fill(0).map((j,i) => parseInt(el['annee'].get(i))),
+        y: Array(el['annee'].length).fill(0).map((j,i) => el['s_old'].get(i)),
+        type: "scatter",
+        mode: 'lines',
+        hoverinfo: "x+y+text",
+        xaxis: 'x'+el['mois'],
+        yaxis: 'y',
+        text: 'Composante saisonnière - Ancien workspace',
+        visible: choix_ws_siratio.includes(73),
+        showlegend: false,
+        line: {color: '#e6c372', dash: 'solid'}
+      },
+      {
+        x: Array(el['annee'].length).fill(0).map((j,i) => parseInt(el['annee'].get(i))),
+        y: Array(el['annee'].length).fill(0).map((j,i) => el['s_new'].get(i)),
+        type: "scatter",
+        mode: 'lines',
+        hoverinfo: "x+y+text",
+        xaxis: 'x'+el['mois'],
+        yaxis: 'y',
+        text: 'Composante saisonnière - Nouveau workspace',
+        visible: choix_ws_siratio.includes(72),
+        showlegend: false,
+        line: {color: '#988ed1', dash: 'solid'}
+      }
+      
+    ]) ;
+  }).flat() ;
+  
+  var legend = [
+    {
+      x: [null],
+      y: [null],
+      type: "bar",
+      name: "Nouveau workspace",
+      visible: choix_ws_siratio.includes(72) ? true : 'legendonly',
+      marker: {color: '#988ed1'}
+    },
+    {
+      x: [null],
+      y: [null],
+      type: "bar",
+      name: "Ancien workspace",
+      visible: choix_ws_siratio.includes(73) ? true : 'legendonly',
+      marker: {color:'#e6c372'}
+    }
+  ] ;
+  
+  var layout = {
+    title: false,
+    margin: {l: 50, r:50, b:70, t:20, pad:4},
+    width: width,
+    height: 500,
+    yaxis: {
+      showgrid: true,
+      showline: true,
+      mirror: 'all'
+    },
+    xaxis1: {
+      showgrid: false,
+      showline: true,
+      mirror: true,
+      showticklabels: false,
+      title:{
+        text: "Janvier",
+        font: {size: 10}
+      }
+    },
+    xaxis2: {
+      showgrid: false,
+      showline: true,
+      mirror: true,
+      showticklabels: false,
+      title:{
+        text: "Février",
+        font: {size: 10}
+      }
+    },
+    xaxis3: {
+      showgrid: false,
+      showline: true,
+      mirror: true,
+      showticklabels: false,
+      title:{
+        text: "Mars",
+        font: {size: 10}
+      }
+    },
+    xaxis4: {
+      showgrid: false,
+      showline: true,
+      mirror: true,
+      showticklabels: false,
+      title:{
+        text: "Avril",
+        font: {size: 10}
+      }
+    },
+    xaxis5: {
+      showgrid: false,
+      showline: true,
+      mirror: true,
+      showticklabels: false,
+      title:{
+        text: "Mai",
+        font: {size: 10}
+      }
+    },
+    xaxis6: {
+      showgrid: false,
+      showline: true,
+      mirror: true,
+      showticklabels: false,
+      title:{
+        text: "Juin",
+        font: {size: 10}
+      }
+    },
+    xaxis7: {
+      showgrid: false,
+      showline: true,
+      mirror: true,
+      showticklabels: false,
+      title:{
+        text: "Juillet",
+        font: {size: 10}
+      }
+    },
+    xaxis8: {
+      showgrid: false,
+      showline: true,
+      mirror: true,
+      showticklabels: false,
+      title:{
+        text: "Août",
+        font: {size: 10}
+      }
+    },
+    xaxis9: {
+      showgrid: false,
+      showline: true,
+      mirror: true,
+      showticklabels: false,
+      title:{
+        text: "Septembre",
+        font: {size: 10}
+      }
+    },
+    xaxis10: {
+      showgrid: false,
+      showline: true,
+      mirror: true,
+      showticklabels: false,
+      title:{
+        text: "Octobre",
+        font: {size: 10}
+      }
+    },
+    xaxis11: {
+      showgrid: false,
+      showline: true,
+      mirror: true,
+      showticklabels: false,
+      title:{
+        text: "Novembre",
+        font: {size: 10}
+      }
+      
+    },
+    xaxis12: {
+      showgrid: false,
+      showline: true,
+      mirror: true,
+      showticklabels: false,
+      title:{
+        text: "Décembre",
+        font: {size: 10}
+      }
+    },
+    grid: {rows: 1, columns: 12, xgap: 0.1},
+    hovermode: 'x',
+    hoverlabel : {namelength : -1},
+    legend: {
+      orientation: "h", 
+      yanchor: "bottom",
+      y: 1.02,
+      xanchor: "right",
+      x: 1
+    }
+  };
+  
+  var config = {locale: 'fr', displayModeBar: false};
+  
+  const div = DOM.element('div');
+  div.setAttribute("id", "divSiRatioPlotly");
+  Plotly.newPlot(div, traces.concat(legend), layout, config);
+  
+  div.on('plotly_legendclick', function(data){
+    var update = {visible:true};
+    var type_ajout = true ;
+    var numbers = data['data'].map((x,i) => {
+      var titre = '';
+      try   {
+        titre = x['text'] ;
+      } catch {
+        return -1;
+      }
+      if(titre === undefined){
+        return -1;
+      }
+      
+      if((titre.match('Nouveau workspace') !==null) && data.curveNumber === 72){
+        return i;
+      } else if((titre.match('Ancien workspace') !== null) && data.curveNumber === 73){
+        return i;
+      } else {
+        return -1;
+      }
+    }).filter((x) => x>=0) ;
+    
+    if(data['fullData'][data.curveNumber]['visible'] === 'legendonly'){
+      choix_ws_siratio.push(data.curveNumber) ;
+    } else {
+      update = {visible:"legendonly"} ;
+      var i  = choix_ws_siratio.findIndex((x) => {return x === data.curveNumber}) ;
+      choix_ws_siratio.splice(i, 1);
+      type_ajout = false ;
+    }
+    Plotly.restyle('divSiRatioPlotly', update,[data.curveNumber]);
+    if(type_ajout === true){
+      var update2 = {visible: true};
+      Plotly.restyle('divSiRatioPlotly', update2, numbers);
+    } else {
+      var update2 = {visible: false};
+      Plotly.restyle('divSiRatioPlotly', update2, numbers);
+    }
+    
+    return false;
+  });
+  
+  div.on('plotly_legenddoubleclick', function(data){
+    return false;
+  });
+  
+  return div ;
+}
+
+```
