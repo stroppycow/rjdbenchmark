@@ -1,7 +1,7 @@
 FROM r-base:4.4.2
 COPY . /home/rjdbenchmark
 RUN apt-get update && \
-    apt-get install -y default-jdk wget unzip libprotobuf-dev libgit2-dev && \
+    apt-get install -y default-jdk wget unzip libprotobuf-dev libgit2-1.5 && \
     mkdir -p /home/cruncher && \
     mkdir -p /home/rjdbenchmark && \
     wget https://github.com/jdemetra/jdplus-main/releases/download/v3.4.0/jwsacruncher-3.4.0.zip -O /home/cruncher/jwsacruncher-3.4.0-bin.zip && \
