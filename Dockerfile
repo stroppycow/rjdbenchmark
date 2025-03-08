@@ -1,4 +1,4 @@
-FROM r-base:4.4.2
+FROM r-base:4.4.3
 COPY . /home/rjdbenchmark
 RUN apt-get update && \
     apt-get install -y default-jdk wget curl git-all unzip libprotobuf-dev libgit2-dev libcurl4-openssl-dev && \
@@ -16,7 +16,7 @@ RUN apt-get update && \
     cd /home/cruncher && \
     unzip "*.zip" && \
     rm *.zip && \
-    R --no-restore --no-save -e 'install.packages("gert")' \
+    R --no-restore --no-save -e 'install.packages("gert")' && \
     cd /home/rjdbenchmark && \
     R --no-restore --no-save -e 'options(renv.config.repos.override = "https://packagemanager.posit.co/cran/__linux__/bookworm/latest")'  -e 'renv::restore()'  -e 'renv::install("devtools")'  -e 'devtools::install(".")'
 WORKDIR /home/rjdbenchmark
