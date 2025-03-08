@@ -16,7 +16,7 @@ RUN apt-get update && \
     cd /home/cruncher && \
     unzip "*.zip" && \
     rm *.zip && \
-    R --no-restore --no-save -e 'install.packages("gert")' && \
     cd /home/rjdbenchmark && \
-    R --no-restore --no-save -e 'options(renv.config.repos.override = "https://packagemanager.posit.co/cran/__linux__/bookworm/latest")'  -e 'renv::restore()'  -e 'renv::install("devtools")'  -e 'devtools::install(".")'
+    R --no-restore --no-save -e 'options(renv.config.repos.override = "https://packagemanager.posit.co/cran/__linux__/bookworm/latest")'  -e 'renv::restore()' -e 'renv::install("devtools")'  -e 'devtools::install(".")' && \
+    R --no-restore --no-save -e 'options(renv.config.repos.override = "https://packagemanager.posit.co/cran/__linux__/bookworm/latest")' -e 'renv::install("gert", type = "source")'  -e 'renv::install("devtools")'  -e 'devtools::install(".")'
 WORKDIR /home/rjdbenchmark
