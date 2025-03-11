@@ -193,23 +193,23 @@ function format_span(info){
   if(info['period'] == 12){
   
     var serie_span_start = new Date(
-      info['serie_span_start'].getFullYear(),
-      info['serie_span_start'].getMonth(),
+      parseInt(info['serie_span_start'].substring(0, 4)),
+      parseInt(info['serie_span_start'].substring(5, 7)),
       1
     );
     var serie_span_end = new Date(
-      info['serie_span_end'].getFullYear(),
-      info['serie_span_end'].getMonth(),
+      parseInt(info['serie_span_end'].substring(0, 4)),
+      parseInt(info['serie_span_end'].substring(5, 7)),
       1
     );
     var estimation_span_start = new Date(
-      info['estimation_span_start'].getFullYear(),
-      info['estimation_span_start'].getMonth(),
+      parseInt(info['estimation_span_start'].substring(0, 4)),
+      parseInt(info['estimation_span_start'].substring(5, 7)),
       1
     );
     var  estimation_span_end = new Date(
-      info['estimation_span_end'].getFullYear(),
-      info['estimation_span_end'].getMonth(),
+      parseInt(info['estimation_span_end'].substring(0, 4)),
+      parseInt(info['estimation_span_end'].substring(5, 7)),
       1
     );
     d = {
@@ -218,23 +218,23 @@ function format_span(info){
     } ;
   } else {
     var  serie_span_start = new Date(
-      info['serie_span_start'].getFullYear(),
-      info['serie_span_start'].getMonth()-2,
+      parseInt(info['serie_span_start'].substring(0, 4)),
+      parseInt(info['serie_span_start'].substring(5, 7))-2,
       1
     );
     var serie_span_end = new Date(
-      info['serie_span_end'].getFullYear(),
-      info['serie_span_end'].getMonth()-2,
+      parseInt(info['serie_span_end'].substring(0, 4)),
+      parseInt(info['serie_span_end'].substring(5, 7))-2,
       1
     );
     var estimation_span_start = new Date(
-      info['estimation_span_start'].getFullYear(),
-      info['estimation_span_start'].getMonth()-2,
+      parseInt(info['estimation_span_start'].substring(0, 4)),
+      parseInt(info['estimation_span_start'].substring(5, 7))-2,
       1
     );
     var estimation_span_end = new Date(
-      info['estimation_span_end'].getFullYear(),
-      info['estimation_span_end'].getMonth()-2,
+      parseInt(info['estimation_span_end'].substring(0, 4)),
+      parseInt(info['estimation_span_end'].substring(5, 7))-2,
       1
     );
     d = {
@@ -336,6 +336,7 @@ async function get_trace_jd(ws, sa_item, serie, old_new, type){
 }
 
 function format_stat_jd(pvalue, qualite){
+  
   var color = '#000000' ;
   if(qualite === 'Severe'){
     color = '#960000' ;
@@ -346,7 +347,14 @@ function format_stat_jd(pvalue, qualite){
   } else if(qualite === 'Good'){
     color = '#27b850' ;
   }
-  return '<p style="color:'+color+'";>'+ qualite + ' ('+ pvalue+ ')</p>' ;
+
+  if(pvalue === null){
+    return '<p style="color:'+color+'";>'+ qualite + '</p>' ;
+  } else {
+    return '<p style="color:'+color+'";>'+ qualite + ' ('+ pvalue+ ')</p>' ;
+  }
+
+  
 }
 
 ```
@@ -583,6 +591,21 @@ infos_new_sel = (await db.query(`
       'new': sa_item_new_sel
     },
     {
+      'label':'Score de qualité globale',
+      'old': format_stat_jd(null, infos_old_sel['summary']),
+      'new': format_stat_jd(null, infos_new_sel['summary'])
+    },
+    {
+      'label':'Version du cruncher utilisée',
+      'old': infos_old_sel['version'],
+      'new': infos_new_sel['version']
+    },
+        {
+      'label':'Mode de rafraichissement',
+      'old': infos_old_sel['refresh_policy'],
+      'new': infos_new_sel['refresh_policy']
+    },
+    {
       'label':'Estimation span',
       'old': format_span(infos_old_sel)['estimation_span'],
       'new': format_span(infos_new_sel)['estimation_span']
@@ -616,6 +639,63 @@ infos_new_sel = (await db.query(`
 
 ### Profil
 
+```{ojs}
+//| echo: false
+relayout_plotly_ts = function(data, id){
+  if(data.hasOwnProperty('xaxis.range')){
+    range_date[0] = data['xaxis.range'][0] ;
+    range_date[1] = data['xaxis.range'][1] ;
+    if(id == 'divSeriesPlotlyIndice'){
+      generer_tableau_revision(range_date) ;
+    }
+    
+    var new_data = {
+      'xaxis.range': [data['xaxis.range'][0].substring(0,10), data['xaxis.range'][1].substring(0,10),],
+    } ;
+    var ids = ['divSeriesPlotlyIndice', 'divSeriesPlotlyEvol', 'divSeriesPlotlyGlissement'] ;
+    ids.map(
+      (x) => {
+        var graphDiv = document.getElementById(x) ;
+        var layoutRetrievedLater = graphDiv.layout ;
+        if(
+          (new_data['xaxis.range'][0] !== layoutRetrievedLater['xaxis']['range'][0]) ||
+          (new_data['xaxis.range'][1] !== layoutRetrievedLater['xaxis']['range'][1])){
+            Plotly.relayout(x, new_data) ;
+        }
+      }
+    ) ;
+  }
+
+  return false;
+}
+
+legend_click_plotly_ts = function(data, id){
+  var update = {visible:"true"};
+  if(data['fullData'][data.curveNumber]['visible'] === 'legendonly'){
+    traces_series.push(data.curveNumber) ;
+  } else {
+    update = {visible:"legendonly"} ;
+    var i  = traces_series.findIndex((x) => {return x === data.curveNumber}) ;
+    traces_series.splice(i, 1);
+  }
+  
+  if(id === 'divSeriesPlotlyIndice'){
+    Plotly.restyle('divSeriesPlotlyEvol', update, [data.curveNumber]);
+    Plotly.restyle('divSeriesPlotlyGlissement', update, [data.curveNumber]);
+  }
+  if(id === 'divSeriesPlotlyEvol'){
+    Plotly.restyle('divSeriesPlotlyIndice', update, [data.curveNumber]);
+    Plotly.restyle('divSeriesPlotlyGlissement', update, [data.curveNumber]);
+  }
+  if(id === 'divSeriesPlotlyGlissement'){
+    Plotly.restyle('divSeriesPlotlyIndice', update, [data.curveNumber]);
+    Plotly.restyle('divSeriesPlotlyGlissement', update, [data.curveNumber]);
+  }
+  
+  return false;
+}
+```
+
 ::: panel-tabset
 #### Indice
 
@@ -635,7 +715,6 @@ infos_new_sel = (await db.query(`
     return (await get_trace_jd(ws_new_sel, sa_item_new_sel, x, 'new', 'indice'))
   })) ;
   traces_new[0]['legendgrouptitle'] = {text: 'Nouveau workspace', font: {color: 'black', size: 15}} ;
-  
   
   var requete_y = await db.query(`
              SELECT date, value 
@@ -694,30 +773,15 @@ infos_new_sel = (await db.query(`
   var config = {locale: 'fr', displayModeBar: false};
   
   const div = DOM.element('div');
-  div.setAttribute("id", "divSeriesPlotly");
+  div.setAttribute("id", "divSeriesPlotlyIndice");
   Plotly.newPlot(div, traces, layout, config);
   
   div.on('plotly_legendclick', function(data){
-    var update = {visible:"true"};
-    if(data['fullData'][data.curveNumber]['visible'] === 'legendonly'){
-      traces_series.push(data.curveNumber) ;
-    } else {
-      update = {visible:"legendonly"} ;
-      var i  = traces_series.findIndex((x) => {return x === data.curveNumber}) ;
-      traces_series.splice(i, 1);
-    }
-    
-    Plotly.restyle('divSeriesPlotly', update,[data.curveNumber]);
-    return false;
+    legend_click_plotly_ts(data, 'divSeriesPlotlyIndice') ;
   });
   
   div.on('plotly_relayout', function(data){
-    if(data.hasOwnProperty('xaxis.range')){
-      range_date[0] = data['xaxis.range'][0] ;
-      range_date[1] = data['xaxis.range'][1] ;
-      generer_tableau_revision(range_date) ;
-    }
-    return false;
+    relayout_plotly_ts(data, 'divSeriesPlotlyIndice') ;
   });
   
   return div ;
@@ -737,7 +801,6 @@ infos_new_sel = (await db.query(`
     return (await get_trace_jd(ws_old_sel, sa_item_old_sel, x, 'old', 'evol'))
   })) ;
   traces_old[0]['legendgrouptitle']  = {text: 'Ancien workspace', font: {color: 'black', size: 15}} ;
-
   
   var traces_new = await Promise.all(choix.map(async (x) => {
     return (await get_trace_jd(ws_new_sel, sa_item_new_sel, x, 'new', 'evol'))
@@ -806,29 +869,15 @@ infos_new_sel = (await db.query(`
   var config = {locale: 'fr', displayModeBar: false};
   
   const div = DOM.element('div');
-  div.setAttribute("id", "divSeriesPlotly");
+  div.setAttribute("id", "divSeriesPlotlyEvol");
   Plotly.newPlot(div, traces, layout, config);
   
   div.on('plotly_legendclick', function(data){
-    var update = {visible:"true"};
-    if(data['fullData'][data.curveNumber]['visible'] === 'legendonly'){
-      traces_series.push(data.curveNumber) ;
-    } else {
-      update = {visible:"legendonly"} ;
-      var i  = traces_series.findIndex((x) => {return x === data.curveNumber}) ;
-      traces_series.splice(i, 1);
-    }
-    
-    Plotly.restyle('divSeriesPlotly', update,[data.curveNumber]);
-    return false;
+    legend_click_plotly_ts(data, 'divSeriesPlotlyEvol') ;
   });
   
   div.on('plotly_relayout', function(data){
-    if(data.hasOwnProperty('xaxis.range')){
-      range_date[0] = data['xaxis.range'][0] ;
-      range_date[1] = data['xaxis.range'][1] ;
-    }
-    return false;
+    relayout_plotly_ts(data, 'divSeriesPlotlyEvol') ;
   });
   
   return div ;
@@ -916,34 +965,19 @@ infos_new_sel = (await db.query(`
   var config = {locale: 'fr', displayModeBar: false};
   
   const div = DOM.element('div');
-  div.setAttribute("id", "divSeriesPlotly");
+  div.setAttribute("id", "divSeriesPlotlyGlissement");
   Plotly.newPlot(div, traces, layout, config);
   
   div.on('plotly_legendclick', function(data){
-    var update = {visible:"true"};
-    if(data['fullData'][data.curveNumber]['visible'] === 'legendonly'){
-      traces_series.push(data.curveNumber) ;
-    } else {
-      update = {visible:"legendonly"} ;
-      var i  = traces_series.findIndex((x) => {return x === data.curveNumber}) ;
-      traces_series.splice(i, 1);
-    }
-    
-    Plotly.restyle('divSeriesPlotly', update,[data.curveNumber]);
-    return false;
+    legend_click_plotly_ts(data, 'divSeriesPlotlyGlissement') ;
   });
   
   div.on('plotly_relayout', function(data){
-    if(data.hasOwnProperty('xaxis.range')){
-      range_date[0] = data['xaxis.range'][0] ;
-      range_date[1] = data['xaxis.range'][1] ;
-    }
-    return false;
+    relayout_plotly_ts(data, 'divSeriesPlotlyGlissement') ;
   });
   
   return div ;
 }
-
 ```
 :::
 
@@ -1890,3 +1924,4 @@ choix_ws_siratio = [72, 73] ;
 }
 
 ```
+
