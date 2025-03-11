@@ -5,7 +5,7 @@ on:
     branches:
       - 'main'
     tags:
-     - 'v*.*.*'
+      - 'v*.*.*'
 
 jobs:
   docker:
@@ -23,7 +23,8 @@ jobs:
         with:
           username: ${{ secrets.DOCKER_USER }}
           password: ${{ secrets.DOCKER_PWD }}
-      - name: Set Docker Tag
+      - 
+        name: Set Docker Tag
         id: set-tag
         run: |
           if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
