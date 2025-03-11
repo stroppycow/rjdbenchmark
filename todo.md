@@ -4,9 +4,9 @@
 
 ## Static Website Generation (Quarto Template / HTML / JavaScript)
 - [ ] Move most of the JavaScript code into separate files to improve readability and maintainability
-- [ ] Fix desynchronization bug in Plotly-displayed time series charts
+- [x] Fix desynchronization bug in Plotly-displayed time series charts
 - [ ] Speed up panel visualization for time series
-- [ ] Display the JDemetra version used and overall quality
+- [x] Display the JDemetra version used and overall quality
 - [ ] Implement multi-language support
 - [ ] Improve comments in Observable code
 - [ ] Interface with GitHub or GitLab to comment on time series

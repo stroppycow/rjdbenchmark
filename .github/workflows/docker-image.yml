@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - 'main'
+    tags:
+     - 'v*.*.*'
 
 jobs:
   docker:
@@ -21,9 +23,21 @@ jobs:
         with:
           username: ${{ secrets.DOCKER_USER }}
           password: ${{ secrets.DOCKER_PWD }}
+      - name: Set Docker Tag
+        id: set-tag
+        run: |
+          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            echo "TAG=latest${{ env.CUSTOM_SUFFIX }}" >> $GITHUB_ENV
+          elif [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}${{ env.CUSTOM_SUFFIX }}"
+            echo "TAG=$TAG" >> $GITHUB_ENV
+          else
+            echo "Not on main or a tag, skipping build."
+            exit 0
+          fi
       -
         name: Build and push
         uses: docker/build-push-action@v3
         with:
           push: true
-          tags: stroppycow/rjdbenchmark:latest
+          tags: stroppycow/rjdbenchmark:$TAG
