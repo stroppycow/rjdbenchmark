@@ -28,7 +28,7 @@ jobs:
         id: set-tag
         run: |
           if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
-            echo "TAG=latest${{ env.CUSTOM_SUFFIX }}" >> $GITHUB_ENV
+            echo "TAG=latest" >> $GITHUB_ENV
           elif [[ "${{ github.ref }}" == refs/tags/v* ]]; then
             TAG="${GITHUB_REF#refs/tags/}${{ env.CUSTOM_SUFFIX }}"
             echo "TAG=$TAG" >> $GITHUB_ENV
