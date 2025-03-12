@@ -10,6 +10,9 @@
 - [ ] Implement multi-language support
 - [ ] Improve comments in Observable code
 - [ ] Interface with GitHub or GitLab to comment on time series
+- [x] Fix bug span SI ratio plot
+- [x] Fix print date span bug
+- [ ] Create a summary table on the first page
 
 ## Documentation
 - [ ] Add comments to necessary files for setting up this comparison pipeline
