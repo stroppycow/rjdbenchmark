@@ -352,7 +352,7 @@ read_metadata_file <- function(path = "./data/metadata.yaml"){
     stop("The 'series' object is not a valid non-empty list.")
   }
 
-  lapply(
+  metadata$series <- lapply(
     X = seq.int(along.with = metadata$series),
     FUN = function(i){
       if(!is.list(metadata$series[[i]])){
@@ -540,6 +540,7 @@ read_metadata_file <- function(path = "./data/metadata.yaml"){
           }
         )
       }
+      return(metadata$series[[i]])
     }
   )
 
