@@ -16,7 +16,7 @@ format:
 //| echo: false
 //| output: false
 
-Plotly = require("https://cdn.plot.ly/plotly-2.29.1.min.js")
+Plotly = require("https://cdn.plot.ly/plotly-2.29.1.min.js") ;
 import("https://cdn.plot.ly/plotly-2.29.1.min.js")
 
 chroma = require(await FileAttachment("../../static/js/chroma.min.js").url()) ;
@@ -353,8 +353,6 @@ function format_stat_jd(pvalue, qualite){
   } else {
     return '<p style="color:'+color+'";>'+ qualite + ' ('+ pvalue+ ')</p>' ;
   }
-
-  
 }
 
 ```
@@ -370,7 +368,7 @@ range_date = [
   ))[0]['val'],
   (await db.query(
     `SELECT strftime(max(date), '%Y-%m-%d') as val FROM jd_series`,[]
-  ))[0]['val'],
+  ))[0]['val']
 ] ;
 ```
 
@@ -379,7 +377,8 @@ range_date = [
 //| output: false
 
 {
-  document.addEventListener('keyup', (e) => {
+    
+   document.addEventListener('keyup', (e) => {
     let new_rank = -1 ;
     let i = 0 ;
     let size = available_series_map.length ;
@@ -535,30 +534,27 @@ formatter_percent = new Intl.NumberFormat(undefined, {
 
 weight_serie_sel = formatter_percent.format(mapping_sel['weight']) ;
 
-infos_old_sel = (await db.query(`
-    SELECT *
-    FROM jd_infos
-    WHERE ws_name = ? and type_ws = 'old' and series = ?
-`,
-  [
-  ws_old_sel,
-  sa_item_old_sel
-]))[0].toJSON() ;
+async function extract_info_ws(ws, old_new, sa_item){
+    var res = await db.query(`
+        SELECT *
+        FROM jd_infos
+        WHERE ws_name = ? and type_ws = ? and series = ?
+        `,
+          [
+          ws,
+          old_new,
+          sa_item
+     ]) ;
+    if(res.length == 0){
+        return(null) ;
+    } else {
+        return(res[0].toJSON()) ;
+    }
+}
 
 
-infos_new_sel = (await db.query(`
-    SELECT *
-    FROM jd_infos
-    WHERE ws_name = ? and type_ws = 'new' and series = ?
-`,
-  [
-  ws_new_sel,
-  sa_item_new_sel
-]))[0].toJSON() ;
-
-
-
-
+infos_old_sel = extract_info_ws(ws_old_sel, 'old', sa_item_old_sel) ;
+infos_new_sel = extract_info_ws(ws_new_sel, 'new', sa_item_new_sel) ;
 ```
 
 ::: {.callout-tip collapse="true"}
@@ -582,38 +578,38 @@ infos_new_sel = (await db.query(`
   var data_generalite = [
     {
       'label':'Nom du workspace',
-      'old': ws_old_sel,
-      'new': ws_new_sel
+      'old': ((infos_old_sel === null) ? ' - ' :  ws_old_sel),
+      'new': ((infos_new_sel === null) ? ' - ' : ws_new_sel)
     },
     {
       'label':'Nom du SaItem',
-      'old': sa_item_old_sel,
-      'new': sa_item_new_sel
+      'old': ((infos_old_sel === null) ? ' - ' : sa_item_old_sel),
+      'new': ((infos_new_sel === null) ? ' - ' : sa_item_new_sel)
     },
     {
       'label':'Score de qualité globale',
-      'old': format_stat_jd(null, infos_old_sel['summary']),
-      'new': format_stat_jd(null, infos_new_sel['summary'])
+      'old': ((infos_old_sel === null) ? ' - ' : format_stat_jd(null, infos_old_sel['summary'])),
+      'new': ((infos_new_sel === null) ? ' - ' : format_stat_jd(null, infos_new_sel['summary']))
     },
     {
       'label':'Version du cruncher utilisée',
-      'old': infos_old_sel['version'],
-      'new': infos_new_sel['version']
+      'old': ((infos_old_sel === null) ? ' - ' : infos_old_sel['version']),
+      'new': ((infos_new_sel === null) ? ' - ' : infos_new_sel['version'])
     },
         {
       'label':'Mode de rafraichissement',
-      'old': infos_old_sel['refresh_policy'],
-      'new': infos_new_sel['refresh_policy']
+      'old': ((infos_old_sel === null) ? ' - ' : infos_old_sel['refresh_policy']),
+      'new': ((infos_new_sel === null) ? ' - ' : infos_new_sel['refresh_policy'])
     },
     {
       'label':'Estimation span',
-      'old': format_span(infos_old_sel)['estimation_span'],
-      'new': format_span(infos_new_sel)['estimation_span']
+      'old': ((infos_old_sel === null) ? ' - ' : format_span(infos_old_sel)['estimation_span']),
+      'new': ((infos_new_sel === null) ? ' -'  : format_span(infos_new_sel)['estimation_span'])
     },
     {
       'label':'Serie span',
-      'old': format_span(infos_old_sel)['serie_span'],
-      'new': format_span(infos_new_sel)['serie_span']
+      'old': ((infos_old_sel === null) ? ' - ' : format_span(infos_old_sel)['serie_span']),
+      'new': ((infos_new_sel === null) ? ' - ' : format_span(infos_new_sel)['serie_span'])
     }
   ] ; 
       
@@ -641,7 +637,93 @@ infos_new_sel = (await db.query(`
 
 ```{ojs}
 //| echo: false
-relayout_plotly_ts = function(data, id){
+function throttle(callback, delay) {
+    var last;
+    var timer;
+    return function () {
+        var context = this;
+        var now = +new Date();
+        var args = arguments;
+        if (last && now < last + delay) {
+            // le délai n'est pas écoulé on reset le timer
+            clearTimeout(timer);
+            timer = setTimeout(function () {
+                last = now;
+                callback.apply(context, args);
+            }, delay);
+        } else {
+            last = now;
+            callback.apply(context, args);
+        }
+    };
+}
+
+
+function debounce(callback, delay){
+    var timer;
+    return function(){
+        var args = arguments;
+        var context = this;
+        clearTimeout(timer);
+        timer = setTimeout(function(){
+            callback.apply(context, args);
+        }, delay)
+    }
+}
+
+function get_yaxis_range(traces, range){
+    var min_date =  new Date(
+      parseInt(range[0].substring(0, 4)),
+      parseInt(range[0].substring(5, 7))-1,
+      1
+    ) ;
+    var max_date =  new Date(
+      parseInt(range[1].substring(0, 4)),
+      parseInt(range[1].substring(5, 7))-1,
+      1
+    ) ;
+
+    
+    var min_max_all_visibles = traces.reduce(
+        (accumulator, trace) => {
+            if(trace['visible'] === true){
+                var  couples = trace['x'].map((val, index) => [val, trace['y'][index]]) ;
+                return couples.reduce(
+                    (acc, el) => {
+                        if(el[0] >= acc['min_date'] && el[0] <= acc['max_date']){
+                            if(el[1] > acc['max_val']){
+                               acc['max_val'] = el[1] ;
+                            }
+                            if(el[1] < acc['min_val']){
+                               acc['min_val'] = el[1] ;
+                            }
+                        }
+                        return(acc) ;
+                    },
+                    accumulator
+                ) ;
+            } else {
+               return(accumulator) ;
+            }
+        },
+        {
+            max_val: Number.NEGATIVE_INFINITY,
+            min_val: Number.POSITIVE_INFINITY,
+            min_date: min_date,
+            max_date: max_date
+        }
+    ) ;
+    if(min_max_all_visibles['min_val'] === Number.POSITIVE_INFINITY){
+        return([0 , 1]);
+    } else {
+        return([
+            min_max_all_visibles['min_val']-(min_max_all_visibles['max_val']-min_max_all_visibles['min_val'])/10,
+            min_max_all_visibles['max_val']+(min_max_all_visibles['max_val']-min_max_all_visibles['min_val'])/10
+        ]); 
+    }
+}
+
+function relayout_plotly_ts(data, id){
   if(data.hasOwnProperty('xaxis.range')){
     range_date[0] = data['xaxis.range'][0] ;
     range_date[1] = data['xaxis.range'][1] ;
@@ -656,10 +738,12 @@ relayout_plotly_ts = function(data, id){
     ids.map(
       (x) => {
         var graphDiv = document.getElementById(x) ;
+        
         var layoutRetrievedLater = graphDiv.layout ;
         if(
           (new_data['xaxis.range'][0] !== layoutRetrievedLater['xaxis']['range'][0]) ||
           (new_data['xaxis.range'][1] !== layoutRetrievedLater['xaxis']['range'][1])){
+            new_data['yaxis.range'] = get_yaxis_range(graphDiv.data, range_date) ;
             Plotly.relayout(x, new_data) ;
         }
       }
@@ -669,7 +753,7 @@ relayout_plotly_ts = function(data, id){
   return false;
 }
 
-legend_click_plotly_ts = function(data, id){
+function legend_click_plotly_ts(data, id){
   var update = {visible:"true"};
   if(data['fullData'][data.curveNumber]['visible'] === 'legendonly'){
     traces_series.push(data.curveNumber) ;
@@ -764,7 +848,7 @@ legend_click_plotly_ts = function(data, id){
     hovermode: 'x',
     hoverlabel : {namelength : -1},
     xaxis: {
-      rangeslider: {},
+      rangeslider: {yaxis: {rangemode: "auto", range: get_yaxis_range(traces, [dates[0].toISOString(), dates[dates.length-1].toISOString()])}},
       type: 'date',
       range: range_date
     }
@@ -775,18 +859,18 @@ legend_click_plotly_ts = function(data, id){
   const div = DOM.element('div');
   div.setAttribute("id", "divSeriesPlotlyIndice");
   Plotly.newPlot(div, traces, layout, config);
+  Plotly.relayout(div, {'yaxis.range': get_yaxis_range(traces, range_date)}) ;
   
   div.on('plotly_legendclick', function(data){
     legend_click_plotly_ts(data, 'divSeriesPlotlyIndice') ;
   });
   
-  div.on('plotly_relayout', function(data){
+  div.on('plotly_relayout', throttle(function(data){
     relayout_plotly_ts(data, 'divSeriesPlotlyIndice') ;
-  });
+  }), 350);
   
   return div ;
 }
-
 ```
 
 #### Évolutions mensuelles M/M-1
@@ -860,7 +944,7 @@ legend_click_plotly_ts = function(data, id){
     hovermode: 'x',
     hoverlabel : {namelength : -1},
     xaxis: {
-      rangeslider: {},
+       rangeslider: {yaxis: {rangemode: "auto", range: get_yaxis_range(traces, [dates[0].toISOString(), dates[dates.length-1].toISOString()])}},
       type: 'date',
       range: range_date
     }
@@ -871,14 +955,15 @@ legend_click_plotly_ts = function(data, id){
   const div = DOM.element('div');
   div.setAttribute("id", "divSeriesPlotlyEvol");
   Plotly.newPlot(div, traces, layout, config);
+  Plotly.relayout(div, {'yaxis.range': get_yaxis_range(traces, range_date)}) ;
   
   div.on('plotly_legendclick', function(data){
     legend_click_plotly_ts(data, 'divSeriesPlotlyEvol') ;
   });
   
-  div.on('plotly_relayout', function(data){
+  div.on('plotly_relayout', throttle(function(data){
     relayout_plotly_ts(data, 'divSeriesPlotlyEvol') ;
-  });
+  }), 350);
   
   return div ;
 }
@@ -956,7 +1041,7 @@ legend_click_plotly_ts = function(data, id){
     hovermode: 'x',
     hoverlabel : {namelength : -1},
     xaxis: {
-      rangeslider: {},
+       rangeslider: {yaxis: {rangemode: "auto", range: get_yaxis_range(traces, [dates[0].toISOString(), dates[dates.length-1].toISOString()])}},
       type: 'date',
       range: range_date
     }
@@ -967,14 +1052,15 @@ legend_click_plotly_ts = function(data, id){
   const div = DOM.element('div');
   div.setAttribute("id", "divSeriesPlotlyGlissement");
   Plotly.newPlot(div, traces, layout, config);
+  Plotly.relayout(div, {'yaxis.range': get_yaxis_range(traces, range_date)}) ;
   
   div.on('plotly_legendclick', function(data){
     legend_click_plotly_ts(data, 'divSeriesPlotlyGlissement') ;
   });
   
-  div.on('plotly_relayout', function(data){
+  div.on('plotly_relayout', throttle(function(data){
     relayout_plotly_ts(data, 'divSeriesPlotlyGlissement') ;
-  });
+  }), 350);
   
   return div ;
 }
@@ -1032,6 +1118,7 @@ function format_span_revision(start_date, end_date, period){
 
 
 async function generer_tableau_revision(range_date){
+  console.log(range_date) ; 
   var data_revision = (await db.query(` 
                                     SELECT 
                                     min(date) FILTER (indice_new is not null and indice_old is not null) as borne_inf_date_indice,
@@ -1258,23 +1345,23 @@ await generer_tableau_revision(range_date) ;
   var data_qualite = [
     {
       label: 'Modèle SARIMA',
-      old_res: infos_old_sel['arima_model'],
-      new_res: infos_new_sel['arima_model']
+      old_res: ((infos_old_sel === null) ? ' - ' : infos_old_sel['arima_model']),
+      new_res: ((infos_new_sel === null) ? ' - ' : infos_new_sel['arima_model'])
     },
     {
       label: 'Transformation',
-      old_res: (infos_old_sel['log'] === 1) ? 'Modèle multiplicatif' : 'Modèle additif',
-      new_res: (infos_new_sel['log'] === 1) ? 'Modèle multiplicatif' : 'Modèle additif'
+      old_res: ((infos_old_sel === null) ? ' - ' : (infos_old_sel['log'] === 1) ? 'Modèle multiplicatif' : 'Modèle additif'),
+      new_res: ((infos_new_sel === null) ? ' - ' : (infos_new_sel['log'] === 1) ? 'Modèle multiplicatif' : 'Modèle additif')
     },
     {
       label:'Effet Pâques',
-      old_res: infos_old_sel['easter'] == 1 ? String.fromCodePoint(0x2705) : String.fromCodePoint(0x274C),
-      new_res: infos_new_sel['easter'] == 1 ? String.fromCodePoint(0x2705) : String.fromCodePoint(0x274C)
+      old_res: ((infos_old_sel === null) ? ' - ' : infos_old_sel['easter'] == 1 ? String.fromCodePoint(0x2705) : String.fromCodePoint(0x274C)),
+      new_res: ((infos_new_sel === null) ? ' - ' : infos_new_sel['easter'] == 1 ? String.fromCodePoint(0x2705) : String.fromCodePoint(0x274C))
     },
     {
       label:'Estimation span',
-      old_res: format_span(infos_old_sel)['estimation_span'],
-      new_res: format_span(infos_new_sel)['estimation_span']
+      old_res: ((infos_old_sel === null) ? ' - ' : format_span(infos_old_sel)['estimation_span']),
+      new_res: ((infos_new_sel === null) ? ' - ' : format_span(infos_new_sel)['estimation_span'])
     },
   ] ;
   
@@ -1437,28 +1524,28 @@ await generer_tableau_revision(range_date) ;
   var data_qualite = [
     {
       label: 'Normalité des résidus<br>(Doornik-Hansen test)',
-      old_res: format_stat_jd(infos_old_sel['residuals_doornikhansen_pvalue'], infos_old_sel['residuals_doornikhansen_modality']),
-      new_res: format_stat_jd(infos_new_sel['residuals_doornikhansen_pvalue'], infos_new_sel['residuals_doornikhansen_modality'])
+      old_res: ((infos_old_sel === null) ? ' - ' : format_stat_jd(infos_old_sel['residuals_doornikhansen_pvalue'], infos_old_sel['residuals_doornikhansen_modality'])),
+      new_res: ((infos_new_sel === null) ? ' - ' : format_stat_jd(infos_new_sel['residuals_doornikhansen_pvalue'], infos_new_sel['residuals_doornikhansen_modality']))
     },
     {
       label: 'Kurtosis/Aplatissement',
-      old_res: format_stat_jd(infos_old_sel['residuals_kurtosis_pvalue'], infos_old_sel['residuals_kurtosis_modality']),
-      new_res: format_stat_jd(infos_new_sel['residuals_kurtosis_pvalue'], infos_new_sel['residuals_kurtosis_modality'])
+      old_res: ((infos_old_sel === null) ? ' - ' : format_stat_jd(infos_old_sel['residuals_kurtosis_pvalue'], infos_old_sel['residuals_kurtosis_modality'])),
+      new_res: ((infos_new_sel === null) ? ' - ' : format_stat_jd(infos_new_sel['residuals_kurtosis_pvalue'], infos_new_sel['residuals_kurtosis_modality']))
     },
     {
       label: 'Skewness/Asymétrie',
-      old_res: format_stat_jd(infos_old_sel['residuals_skewness_pvalue'], infos_old_sel['residuals_skewness_modality']),
-      new_res: format_stat_jd(infos_new_sel['residuals_skewness_pvalue'], infos_new_sel['residuals_skewness_modality'])
+      old_res: ((infos_old_sel === null) ? ' - ' : format_stat_jd(infos_old_sel['residuals_skewness_pvalue'], infos_old_sel['residuals_skewness_modality'])),
+      new_res: ((infos_new_sel === null) ? ' - ' : format_stat_jd(infos_new_sel['residuals_skewness_pvalue'], infos_new_sel['residuals_skewness_modality']))
     },
     {
       label: 'Indépendance des résidus<br>(Ljung-Box test)',
-      old_res: format_stat_jd(infos_old_sel['residuals_lb_pvalue'], infos_old_sel['residuals_lb_modality']),
-      new_res: format_stat_jd(infos_new_sel['residuals_lb_pvalue'], infos_new_sel['residuals_lb_modality'])
+      old_res: ((infos_old_sel === null) ? ' - ' : format_stat_jd(infos_old_sel['residuals_lb_pvalue'], infos_old_sel['residuals_lb_modality'])),
+      new_res: ((infos_new_sel === null) ? ' - ' : format_stat_jd(infos_new_sel['residuals_lb_pvalue'], infos_new_sel['residuals_lb_modality']))
     },
     {
       label: 'Linéarité des résidus<br>(Ljung-Box test)',
-      old_res: format_stat_jd(infos_old_sel['residuals_lb2_pvalue'], infos_old_sel['residuals_lb2_modality']),
-      new_res: format_stat_jd(infos_new_sel['residuals_lb2_pvalue'], infos_new_sel['residuals_lb2_modality'])
+      old_res: ((infos_old_sel === null) ? ' - ' : format_stat_jd(infos_old_sel['residuals_lb2_pvalue'], infos_old_sel['residuals_lb2_modality'])),
+      new_res: ((infos_new_sel === null) ? ' - ' : format_stat_jd(infos_new_sel['residuals_lb2_pvalue'], infos_new_sel['residuals_lb2_modality']))
     }
   ] ;
   
@@ -1491,48 +1578,48 @@ await generer_tableau_revision(range_date) ;
   var data_qualite = [
     {
       label: 'Présence de saisonnalité résiduelle<br>dans la série CVS-CJO (QS Test)',
-      old_res: format_stat_jd(infos_old_sel['qs_residuals_sa_on_sa_pvalue'], infos_old_sel['qs_residuals_sa_on_sa_modality']),
-      new_res: format_stat_jd(infos_new_sel['qs_residuals_sa_on_sa_pvalue'], infos_new_sel['qs_residuals_sa_on_sa_modality'])
+      old_res: ((infos_old_sel === null) ? ' - ' : format_stat_jd(infos_old_sel['qs_residuals_sa_on_sa_pvalue'], infos_old_sel['qs_residuals_sa_on_sa_modality'])),
+      new_res: ((infos_new_sel === null) ? ' - ' : format_stat_jd(infos_new_sel['qs_residuals_sa_on_sa_pvalue'], infos_new_sel['qs_residuals_sa_on_sa_modality']))
     },
     {
       label: 'Présence de saisonnalité résiduelle<br>dans la série CVS-CJO (F Test)',
-      old_res: format_stat_jd(infos_old_sel['f_residuals_sa_on_sa_pvalue'], infos_old_sel['f_residuals_sa_on_sa_modality']),
-      new_res: format_stat_jd(infos_new_sel['f_residuals_sa_on_sa_pvalue'], infos_new_sel['f_residuals_sa_on_sa_modality'])
+      old_res: ((infos_old_sel === null) ? ' - ' : format_stat_jd(infos_old_sel['f_residuals_sa_on_sa_pvalue'], infos_old_sel['f_residuals_sa_on_sa_modality'])),
+      new_res: ((infos_new_sel === null) ? ' - ' : format_stat_jd(infos_new_sel['f_residuals_sa_on_sa_pvalue'], infos_new_sel['f_residuals_sa_on_sa_modality']))
     },
     {
       label: 'Présence de saisonnalité résiduelle<br>dans la composante irrégulière (QS Test)',
-      old_res: format_stat_jd(infos_old_sel['qs_residuals_sa_on_i_pvalue'], infos_old_sel['qs_residuals_sa_on_i_modality']),
-      new_res: format_stat_jd(infos_new_sel['qs_residuals_sa_on_i_pvalue'], infos_new_sel['qs_residuals_sa_on_i_modality'])
+      old_res: ((infos_old_sel === null) ? ' - ' : format_stat_jd(infos_old_sel['qs_residuals_sa_on_i_pvalue'], infos_old_sel['qs_residuals_sa_on_i_modality'])),
+      new_res: ((infos_new_sel === null) ? ' - ' : format_stat_jd(infos_new_sel['qs_residuals_sa_on_i_pvalue'], infos_new_sel['qs_residuals_sa_on_i_modality']))
     },
     {
       label: 'Présence de saisonnalité résiduelle<br>dans la composante irrégulière (F Test)',
-      old_res: format_stat_jd(infos_old_sel['f_residuals_sa_on_i_pvalue'], infos_old_sel['f_residuals_sa_on_i_modality']),
-      new_res: format_stat_jd(infos_new_sel['f_residuals_sa_on_i_pvalue'], infos_new_sel['f_residuals_sa_on_i_modality'])
+      old_res: ((infos_old_sel === null) ? ' - ' : format_stat_jd(infos_old_sel['f_residuals_sa_on_i_pvalue'], infos_old_sel['f_residuals_sa_on_i_modality'])),
+      new_res: ((infos_new_sel === null) ? ' - ' : format_stat_jd(infos_new_sel['f_residuals_sa_on_i_pvalue'], infos_new_sel['f_residuals_sa_on_i_modality']))
     },
     {
       label: 'Présence d\'effets de calendriers résiduels<br>dans la série CVS-CJO (F Test)',
-      old_res: format_stat_jd(infos_old_sel['f_residuals_td_on_sa_pvalue'], infos_old_sel['f_residuals_td_on_sa_modality']),
-      new_res: format_stat_jd(infos_new_sel['f_residuals_td_on_sa_pvalue'], infos_new_sel['f_residuals_td_on_sa_modality'])
+      old_res: ((infos_old_sel === null) ? ' - ' : format_stat_jd(infos_old_sel['f_residuals_td_on_sa_pvalue'], infos_old_sel['f_residuals_td_on_sa_modality'])),
+      new_res: ((infos_new_sel === null) ? ' - ' : format_stat_jd(infos_new_sel['f_residuals_td_on_sa_pvalue'], infos_new_sel['f_residuals_td_on_sa_modality']))
     },
     {
       label: 'Présence d\'effets de calendriers résiduels<br>dans la composante irrégulière (F Test)',
-      old_res: format_stat_jd(infos_old_sel['f_residuals_td_on_i_pvalue'], infos_old_sel['f_residuals_td_on_i_modality']),
-      new_res: format_stat_jd(infos_new_sel['f_residuals_td_on_i_pvalue'], infos_new_sel['f_residuals_td_on_i_modality'])
+      old_res: ((infos_old_sel === null) ? ' - ' : format_stat_jd(infos_old_sel['f_residuals_td_on_i_pvalue'], infos_old_sel['f_residuals_td_on_i_modality'])),
+      new_res: ((infos_new_sel === null) ? ' - ' : format_stat_jd(infos_new_sel['f_residuals_td_on_i_pvalue'], infos_new_sel['f_residuals_td_on_i_modality']))
     },
     {
       label: 'M7<br>Saisonnalité identifiable',
-      old_res: format_stat_jd(infos_old_sel['m7'], infos_old_sel['m7_quality']),
-      new_res: format_stat_jd(infos_new_sel['m7'], infos_new_sel['m7_quality'])
+      old_res: ((infos_old_sel === null) ? ' - ' : format_stat_jd(infos_old_sel['m7'], infos_old_sel['m7_quality'])),
+      new_res: ((infos_new_sel === null) ? ' - ' : format_stat_jd(infos_new_sel['m7'], infos_new_sel['m7_quality']))
     },
     {
       label: 'Indicateur de qualité composite Q',
-      old_res: format_stat_jd(infos_old_sel['q_stat'], infos_old_sel['q_stat_modality']),
-      new_res: format_stat_jd(infos_new_sel['q_stat'], infos_new_sel['q_stat_modality'])
+      old_res: ((infos_old_sel === null) ? ' - ' : format_stat_jd(infos_old_sel['q_stat'], infos_old_sel['q_stat_modality'])),
+      new_res: ((infos_new_sel === null) ? ' - ' : format_stat_jd(infos_new_sel['q_stat'], infos_new_sel['q_stat_modality']))
     },
     {
       label: 'Indicateur de qualité composite Q-M2',
-      old_res: format_stat_jd(infos_old_sel['q_m2_stat'], infos_old_sel['q_m2_stat_modality']),
-      new_res: format_stat_jd(infos_new_sel['q_m2_stat'], infos_new_sel['q_m2_stat_modality'])
+      old_res: ((infos_old_sel === null) ? ' - ' : format_stat_jd(infos_old_sel['q_m2_stat'], infos_old_sel['q_m2_stat_modality'])),
+      new_res: ((infos_new_sel === null) ? ' - ' : format_stat_jd(infos_new_sel['q_m2_stat'], infos_new_sel['q_m2_stat_modality']))
     }
   ] ;
   
@@ -1609,14 +1696,14 @@ choix_ws_siratio = [72, 73] ;
       GROUP by mois
       ORDER BY mois`,
       [
-        infos_new_sel['log'] ,
-        infos_new_sel['log'] ,
-        ws_new_sel,
-        sa_item_new_sel,
-        infos_old_sel['log'] ,
-        infos_old_sel['log'] ,
-        ws_old_sel,
-        sa_item_old_sel
+        ((infos_new_sel === null) ? 0 : infos_new_sel['log']),
+        ((infos_new_sel === null) ? 0 : infos_new_sel['log']) ,
+        ((infos_new_sel === null) ? '' : ws_new_sel),
+        ((infos_new_sel === null) ? '' : sa_item_new_sel),
+        ((infos_old_sel === null) ? 0 : infos_old_sel['log']) ,
+        ((infos_old_sel === null) ? 0 : infos_old_sel['log']) ,
+        ((infos_old_sel === null) ? '' : ws_old_sel),
+        ((infos_old_sel === null) ? '' : sa_item_old_sel)
       ])) ;
   
   
@@ -1924,4 +2011,3 @@ choix_ws_siratio = [72, 73] ;
 }
 
 ```
-
